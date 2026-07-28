@@ -198,6 +198,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .shelfGrid.editing .shelfTile .name::after{content:' ⠿';color:var(--sticker)}
 .shelfTile.drag{animation:none;transform:scale(1.06);opacity:.92;position:relative;z-index:5;
   border-color:var(--sticker);box-shadow:var(--shadow);cursor:grabbing}
+/* a record is hovering over this shelf and will land on it if dropped */
+.shelfTile.droptarget{border-color:var(--sticker)}
+.shelfTile.droptarget .art{box-shadow:inset 0 0 0 2px var(--sticker)}
+.shelfTile.droptarget .name{color:var(--sticker)}
 @keyframes jiggle{0%,100%{transform:rotate(-.6deg)}50%{transform:rotate(.6deg)}}
 @media (prefers-reduced-motion:reduce){
   .shelfGrid.editing .shelfTile,.grid.editing .rec{animation:none}
@@ -1197,7 +1201,7 @@ function updateCrateBar(){
   }
   const note = $('#crateNote');
   if(note) note.textContent = !shelf ? 'Flick through — pick a shelf to reorder'
-    : crateEdit ? 'Drag the spines into the order you want'
+    : crateEdit ? 'Drag to reorder · drop on a shelf tile to move it there'
     : 'Flick through · shelf ' + shelf;
   $('#crate').classList.toggle('editing', crateEdit);
 }
@@ -1254,6 +1258,46 @@ function nextSlot(shelf){
   return max + 1;
 }
 const renumber = ordered => ordered.forEach((it, i) => { it.slot = i + 1; });
+
+/* ── dropping a record onto a shelf tile ────────────────────
+   While a record is being dragged the shelf tiles act as targets, so
+   you can flick one out of the shelf you're in and onto another. The
+   dragged element sits under the pointer, so elementFromPoint is no
+   use here — hit-test the tiles' rectangles directly. */
+function shelfTileUnder(x, y){
+  const grid = $('#shelfGrid');
+  if(!grid) return null;
+  return [...grid.children].find(t => {
+    if(!t.classList || !t.classList.contains('shelfTile')) return false;
+    const r = t.getBoundingClientRect();
+    if(!r.width) return false;                       /* not on screen */
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }) || null;
+}
+function markShelfTarget(tile){
+  const grid = $('#shelfGrid');
+  if(!grid) return;
+  [...grid.children].forEach(t => t.classList &&
+    t.classList.toggle('droptarget', t === tile));
+}
+/* keep the page moving when the tiles are off the top of the screen */
+function edgeScroll(y){
+  if(y < 90) window.scrollBy(0, -18);
+  else if(y > window.innerHeight - 90) window.scrollBy(0, 18);
+}
+function moveToShelf(item, shelfName){
+  if(!item || !shelfName || shelfName === item.shelf) return false;
+  const from = item.shelf;
+  item.shelf = shelfName;
+  /* Clear the slot rather than asking nextSlot for one: the record is
+     already on the new shelf by now, so it would count itself and its
+     stale number, pushing every move one slot further out. Unplaced
+     sorts to the end, then both shelves get renumbered 1..n. */
+  item.slot = null;
+  renumber(DB.items.filter(i => i.shelf === shelfName).sort(bySlot));
+  renumber(DB.items.filter(i => i.shelf === from).sort(bySlot));
+  return true;
+}
 
 /* sleeve view — a release survives if any of its tracks passes BPM/key */
 function visible(){
@@ -1454,7 +1498,7 @@ function updateArrangeBar(){
   $('#btnArrange').style.display = shelf ? '' : 'none';
   $('#btnArrange').textContent = recEdit ? 'done' : 'arrange';
   $('#arrangeNote').textContent = !shelf ? 'Pick a shelf to put it in your own order'
-    : recEdit ? 'Drag records into the order you want'
+    : recEdit ? 'Drag to reorder · drop on a shelf tile to move it there'
     : 'Shelf ' + shelf;
   $('#grid').classList.toggle('editing', recEdit);
 }
@@ -2037,7 +2081,7 @@ $('#btnArrange').onclick = () => {
 
 (function wireRecordDrag(){
   const grid = $('#grid');
-  let dragEl = null, from = -1, moved = false;
+  let dragEl = null, dragUid = '', from = -1, moved = false, overShelf = null;
 
   const tiles = () => [...grid.children].filter(c => c.classList.contains('rec'));
 
@@ -2045,7 +2089,7 @@ $('#btnArrange').onclick = () => {
     if(!recEdit) return;
     const rec = e.target.closest('.rec');
     if(!rec) return;
-    dragEl = rec; moved = false;
+    dragEl = rec; dragUid = rec.dataset.uid; moved = false; overShelf = null;
     from = tiles().indexOf(rec);
     try{ rec.setPointerCapture(e.pointerId); }catch(err){}
     rec.classList.add('drag');
@@ -2055,6 +2099,12 @@ $('#btnArrange').onclick = () => {
   grid.addEventListener('pointermove', e => {
     if(!dragEl) return;
     e.preventDefault();
+    edgeScroll(e.clientY);
+
+    overShelf = shelfTileUnder(e.clientX, e.clientY);
+    markShelfTarget(overShelf);
+    if(overShelf) return;
+
     const list = tiles();
     const over = list.find(c => {
       if(c === dragEl) return false;
@@ -2072,6 +2122,21 @@ $('#btnArrange').onclick = () => {
     if(!dragEl) return;
     dragEl.classList.remove('drag');
     dragEl = null;
+
+    if(overShelf){
+      const target = overShelf.dataset.shelfName;
+      markShelfTarget(null);
+      overShelf = null;
+      const it = DB.items.find(i => i.uid === dragUid);
+      if(moveToShelf(it, target)){
+        save(); renderAll();
+        toast('Moved to shelf ' + target);
+      } else {
+        renderList();
+      }
+      return;
+    }
+
     if(!moved) return;
     const ordered = tiles()
       .map(c => DB.items.find(i => i.uid === c.dataset.uid))
@@ -2103,7 +2168,7 @@ $('#btnCrateArrange').onclick = () => {
 
 (function wireCrateDrag(){
   const rail = $('#crate');
-  let dragEl = null, from = -1, moved = false;
+  let dragEl = null, dragUid = '', from = -1, moved = false, overShelf = null;
 
   const spines = () => [...rail.querySelectorAll('.spine')];
 
@@ -2111,7 +2176,7 @@ $('#btnCrateArrange').onclick = () => {
     if(!crateEdit) return;
     const sp = e.target.closest('.spine');
     if(!sp) return;
-    dragEl = sp; moved = false;
+    dragEl = sp; dragUid = sp.dataset.uid; moved = false; overShelf = null;
     from = spines().indexOf(sp);
     try{ sp.setPointerCapture(e.pointerId); }catch(err){}
     sp.classList.add('drag');
@@ -2121,6 +2186,12 @@ $('#btnCrateArrange').onclick = () => {
   rail.addEventListener('pointermove', e => {
     if(!dragEl) return;
     e.preventDefault();
+    edgeScroll(e.clientY);
+
+    /* over a shelf tile? then this is a move, not a reorder */
+    overShelf = shelfTileUnder(e.clientX, e.clientY);
+    markShelfTarget(overShelf);
+    if(overShelf) return;
 
     /* creep along when the finger sits near either end */
     const box = rail.getBoundingClientRect();
@@ -2143,6 +2214,21 @@ $('#btnCrateArrange').onclick = () => {
     if(!dragEl) return;
     dragEl.classList.remove('drag');
     dragEl = null;
+
+    if(overShelf){
+      const target = overShelf.dataset.shelfName;
+      markShelfTarget(null);
+      overShelf = null;
+      const it = DB.items.find(i => i.uid === dragUid);
+      if(moveToShelf(it, target)){
+        save(); renderAll();
+        toast('Moved to shelf ' + target);
+      } else {
+        renderCrate();                    /* dropped on its own shelf */
+      }
+      return;
+    }
+
     if(!moved) return;
     const ordered = spines()
       .map(c => DB.items.find(i => i.uid === c.dataset.uid))

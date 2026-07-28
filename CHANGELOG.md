@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.9.0 - 2026-07-28 17:03
+
+Drop a record onto a shelf tile to move it between shelves
+
+- Modified `index.html` (+92/-6)
+
 ## 0.8.0 - 2026-07-28 16:34
 
 Drag spines in the flick-through rail to reorder a shelf
