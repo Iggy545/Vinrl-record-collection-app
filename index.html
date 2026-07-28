@@ -586,7 +586,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.2';
+const APP_VERSION = '0.12.3';
 
 const mem = {};
 const store = {
@@ -1837,7 +1837,8 @@ function renderFilters(){
   $('#shelfList').innerHTML = DB.shelves.map((s,i)=>
     `<div class="q"><div class="code">${esc(s)}</div>
      <div class="st">${DB.items.filter(x=>x.shelf===s).length} records</div>
-     ${DB.shelves.length>1?`<button class="ghost" data-shelf-remove="${i}" style="margin-left:10px">remove</button>`:''}</div>`).join('');
+     <button class="ghost" data-shelf-rename="${i}" style="margin-left:10px">rename</button>
+     ${DB.shelves.length>1?`<button class="ghost" data-shelf-remove="${i}" style="margin-left:6px">remove</button>`:''}</div>`).join('');
 }
 
 function bars(map, host, fmt = v=>v){
@@ -2357,6 +2358,28 @@ document.addEventListener('click', e => {
     DB.shelves.splice(i,1);
     DB.items.forEach(x => { if(x.shelf===name){ x.shelf = DB.shelves[0]; x.slot = nextSlot(DB.shelves[0]); } });
     save(); renderAll();
+    return;
+  }
+  /* Renaming is not just DB.shelves[i]: a record stores its shelf by
+     NAME, so every record sitting on it has to be rewritten in the same
+     breath or they'd all point at a shelf that no longer exists and
+     vanish from the crate view. Slots are untouched — nothing moves. */
+  const rn = e.target.closest('[data-shelf-rename]');
+  if(rn){
+    const i = +rn.dataset.shelfRename, from = DB.shelves[i];
+    const to = (prompt('Rename shelf "' + from + '" to:', from) || '').trim();
+    if(!to || to === from) return;
+    if(DB.shelves.some((s, j) => j !== i && s.toLowerCase() === to.toLowerCase()))
+      return toast('You already have a shelf called that');
+    const wasFiltered = $('#shelfFilter').value === from;
+    DB.shelves[i] = to;
+    let n = 0;
+    DB.items.forEach(x => { if(x.shelf === from){ x.shelf = to; n++; } });
+    save(); renderAll();
+    /* the filter dropdown was rebuilt around the new name, so a filter
+       pointing at the old one would silently fall back to All shelves */
+    if(wasFiltered){ $('#shelfFilter').value = to; renderShelfGrid(); renderList(); }
+    toast('Renamed to “' + to + '”' + (n ? ' · ' + n + ' record' + (n === 1 ? '' : 's') + ' updated' : ''), 3200);
   }
 });
 $('#scrim').onclick = closeSheet;
