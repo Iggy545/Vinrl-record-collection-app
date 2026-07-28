@@ -162,6 +162,37 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .dupe{position:absolute;left:6px;top:6px;background:var(--warn);color:#2a1f00;
   font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 5px;border-radius:2px}
 
+/* ── shelves, each its own crate ──────────────────────────── */
+.shelfhead{display:flex;align-items:center;gap:10px;margin:26px 0 10px}
+.shelfhead .eyebrow{margin:0}
+.shelfhead .spacer{flex:1}
+.shelfGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.shelfTile{background:var(--wax);border:1px solid var(--groove);border-radius:14px;
+  padding:9px 9px 7px;cursor:pointer;touch-action:manipulation;
+  transition:border-color .15s ease}
+.shelfTile:hover{border-color:var(--dust)}
+.shelfTile.on{border-color:var(--sticker)}
+.shelfTile .art{position:relative;height:76px;border-radius:7px;overflow:hidden;
+  background:var(--ink);box-shadow:inset 0 2px 12px rgba(0,0,0,.6)}
+.shelfTile .spines{display:flex;gap:2px;height:100%;padding:5px 4px}
+.shelfTile .spines i{flex:1;min-width:2px;border-radius:1px;display:block}
+.shelfTile .count{position:absolute;inset:0;display:grid;place-items:center}
+.shelfTile .count b{background:rgba(20,16,25,.82);border:1px solid var(--groove);
+  border-radius:7px;padding:3px 9px;font-family:var(--mono);font-size:13px;
+  font-weight:700;color:var(--card)}
+.shelfTile .name{margin-top:7px;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shelfTile.empty .art{opacity:.4}
+.shelfGrid.editing .shelfTile{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.shelfGrid.editing .shelfTile .name::after{content:' ⠿';color:var(--sticker)}
+.shelfTile.drag{animation:none;transform:scale(1.06);opacity:.92;position:relative;z-index:5;
+  border-color:var(--sticker);box-shadow:var(--shadow);cursor:grabbing}
+@keyframes jiggle{0%,100%{transform:rotate(-.6deg)}50%{transform:rotate(.6deg)}}
+@media (prefers-reduced-motion:reduce){
+  .shelfGrid.editing .shelfTile{animation:none}
+  .shelfTile.drag{transform:none}
+}
+
 /* ── view toggle ──────────────────────────────────────────── */
 .toggle{display:flex;gap:1px;background:var(--groove);border:1px solid var(--groove);
   border-radius:99px;overflow:hidden;margin:14px 0 0}
@@ -316,6 +347,13 @@ nav button.on{color:var(--sticker)}
 <section class="view" id="v-crate">
   <div class="eyebrow">Your collection</div>
   <div class="strip" id="strip"></div>
+
+  <div class="shelfhead">
+    <div class="eyebrow">Shelves</div>
+    <div class="spacer"></div>
+    <button class="ghost" id="btnShelfEdit">rearrange</button>
+  </div>
+  <div class="shelfGrid" id="shelfGrid"></div>
 
   <div class="eyebrow">Flick through</div>
   <div class="crate-rail"><div class="crate" id="crate"></div></div>
@@ -940,6 +978,42 @@ function renderGrid(){
   }).join('');
 }
 
+/* ── shelves as separate crates ─────────────────────────────
+   One tile per shelf, its spines drawn from the records sitting on
+   it. Tapping a tile filters the collection to that shelf; tapping
+   the same one again clears it. "Rearrange" turns on drag-to-reorder,
+   and DB.shelves order is what the filter and the sheet's shelf
+   picker read, so moving a tile moves it everywhere. */
+let shelfEdit = false;
+
+function renderShelfGrid(){
+  const el = $('#shelfGrid');
+  if(!el) return;
+  const active = $('#shelfFilter').value;
+  el.classList.toggle('editing', shelfEdit);
+
+  if(!DB.shelves.length){
+    el.innerHTML = '<div class="hint">No shelves yet.</div>';
+    return;
+  }
+  el.innerHTML = DB.shelves.map((s, i) => {
+    const items = DB.items.filter(x => x.shelf === s);
+    /* 18 spines is all that stays legible at this tile size */
+    const bars = items.slice(0, 18).map(it => {
+      const h = hue(it.artist + it.label);
+      return `<i style="background:linear-gradient(180deg,hsl(${h} 36% 32%),hsl(${h} 30% 16%))"></i>`;
+    }).join('');
+    return `<div class="shelfTile${items.length ? '' : ' empty'}${s === active ? ' on' : ''}"
+        data-i="${i}" data-shelf="${esc(s)}">
+      <div class="art">
+        <div class="spines">${bars}</div>
+        <div class="count"><b>${items.length}</b></div>
+      </div>
+      <div class="name">${esc(s)}</div>
+    </div>`;
+  }).join('');
+}
+
 function renderFilters(){
   const sh = $('#shelfFilter'), keepS = sh.value;
   sh.innerHTML = '<option value="">All shelves</option>' + DB.shelves.map(s=>`<option>${esc(s)}</option>`).join('');
@@ -991,7 +1065,8 @@ function renderList(){
   $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
   if(MODE==='sleeves') renderGrid(); else renderTracks();
 }
-function renderAll(){ renderStrip(); renderCrate(); renderFilters(); renderList(); renderStats(); }
+/* renderShelfGrid reads the shelf filter, so it follows renderFilters */
+function renderAll(){ renderStrip(); renderCrate(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); }
 
 /* ── detail sheet ─────────────────────────────────────────── */
 let openUid = null;
@@ -1468,6 +1543,69 @@ $('#btnDj').onclick = () => {
   download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
 };
 let importMode = 'csv';
+/* ── shelf tiles: tap to filter, drag to reorder ────────────
+   Pointer events rather than HTML5 drag-and-drop, which doesn't fire
+   on touch. The dragged tile is moved in the DOM as you go so the
+   others shuffle live; DB.shelves is kept in step and saved on drop. */
+$('#btnShelfEdit').onclick = () => {
+  shelfEdit = !shelfEdit;
+  $('#btnShelfEdit').textContent = shelfEdit ? 'done' : 'rearrange';
+  renderShelfGrid();
+};
+
+(function wireShelfTiles(){
+  const grid = $('#shelfGrid');
+  let dragEl = null, from = -1, moved = false;
+
+  grid.addEventListener('pointerdown', e => {
+    if(!shelfEdit) return;
+    const tile = e.target.closest('.shelfTile');
+    if(!tile) return;
+    dragEl = tile; from = +tile.dataset.i; moved = false;
+    /* capture keeps the moves coming if a finger strays off the tile;
+       if the browser won't give it, the drag still works over the grid */
+    try{ tile.setPointerCapture(e.pointerId); }catch(err){}
+    tile.classList.add('drag');
+    e.preventDefault();
+  });
+
+  grid.addEventListener('pointermove', e => {
+    if(!dragEl) return;
+    e.preventDefault();
+    const over = [...grid.children].find(c => {
+      if(c === dragEl) return false;
+      const r = c.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right
+          && e.clientY >= r.top  && e.clientY <= r.bottom;
+    });
+    if(!over) return;
+    const to = +over.dataset.i;
+    DB.shelves.splice(to, 0, DB.shelves.splice(from, 1)[0]);
+    grid.insertBefore(dragEl, to < from ? over : over.nextSibling);
+    [...grid.children].forEach((c, i) => c.dataset.i = i);
+    from = to; moved = true;
+  });
+
+  const drop = () => {
+    if(!dragEl) return;
+    dragEl.classList.remove('drag');
+    dragEl = null;
+    if(moved){ save(); renderFilters(); toast('Shelf order saved'); }
+  };
+  grid.addEventListener('pointerup', drop);
+  grid.addEventListener('pointercancel', drop);
+
+  grid.addEventListener('click', e => {
+    if(shelfEdit) return;                       /* rearranging, not browsing */
+    const tile = e.target.closest('.shelfTile');
+    if(!tile) return;
+    const sel = $('#shelfFilter');
+    sel.value = sel.value === tile.dataset.shelf ? '' : tile.dataset.shelf;
+    renderList(); renderShelfGrid();
+    $('#grid').scrollIntoView({behavior:'smooth', block:'start'});
+  });
+})();
+
 $('#btnFill').onclick = backfill;
 $('#btnImport').onclick = () => { importMode='csv'; $('#file').accept='.csv'; $('#file').click(); };
 $('#btnRestore').onclick = () => { importMode='json'; $('#file').accept='.json'; $('#file').click(); };

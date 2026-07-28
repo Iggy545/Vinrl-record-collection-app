@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.4.0 - 2026-07-28 14:14
+
+Show each shelf as its own crate tile, tap to filter and drag to reorder
+
+- Modified `crate.html` (+139/-1)
+
 ## 0.3.0 - 2026-07-28 13:57
 
 Import tracklists, Discogs IDs, shelves and prices from collection-app CSV exports
