@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.9.1 - 2026-07-28 17:19
+
+Allow arranging without picking a shelf first, so records can be dragged onto a shelf from the all-shelves view
+
+- Modified `index.html` (+71/-25)
+
 ## 0.9.0 - 2026-07-28 17:03
 
 Drop a record onto a shelf tile to move it between shelves
