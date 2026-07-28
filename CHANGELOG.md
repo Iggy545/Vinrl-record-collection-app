@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.1.1 - 2026-07-28 13:18
+
+Check out native line endings on Windows
+
+- Modified `.gitattributes` (+3/-2)
+
 ## 0.1.0 - 2026-07-28
 
 Initial version. The existing single-file app, wrapped in a proper project

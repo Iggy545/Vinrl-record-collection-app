@@ -1,5 +1,6 @@
-# Normalise line endings so diffs stay readable across machines
-* text=auto eol=lf
+# Store LF in the repo, check out native line endings locally,
+# so diffs stay clean and Notepad still renders the files properly.
+* text=auto
 
 *.png binary
 *.jpg binary
