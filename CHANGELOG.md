@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.2.0 - 2026-07-28 13:46
+
+Add 'Fill in from Discogs' so CSV imports get artwork and tracklists
+
+- Modified `crate.html` (+64/-2)
+
 ## 0.1.2 - 2026-07-28 13:27
 
 Use annotated version tags so they reach GitHub

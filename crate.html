@@ -412,9 +412,10 @@ nav button.on{color:var(--sticker)}
       <button class="btn quiet" id="btnImport">Import Discogs CSV</button>
       <button class="btn quiet" id="btnRestore">Restore backup</button>
     </div>
+    <button class="btn quiet" id="btnFill" style="margin-bottom:8px">Fill in from Discogs</button>
     <button class="btn quiet" id="btnDj">Export DJ crate sheet</button>
     <input type="file" id="file" accept=".csv,.json" style="display:none">
-    <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling.</p>
+    <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling. It carries no artwork or tracklists though — Discogs doesn't put them in the export — so after importing, tap <b>Fill in from Discogs</b> to pull those in.</p>
   </div>
 
   <div class="eyebrow">Shelves</div>
@@ -1205,7 +1206,67 @@ function importCsv(text){
     added++;
   });
   save(); renderAll();
-  toast(added + ' records imported. Use “Refresh price” or rescan to pull artwork.');
+  toast(added + ' records imported. Tap “Fill in from Discogs” in Setup to pull artwork and tracklists.', 5200);
+}
+
+/* ── filling in a CSV import ────────────────────────────────
+   Discogs' export has no artwork, tracklist or price columns — only
+   release_id — so imported records arrive as stubs. Walk them and pull
+   the missing pieces, one release at a time. dg() already spaces calls
+   1.1s apart, so the loop needs no throttle of its own. */
+let filling = false;
+const needsFill = it => it.id && (!it.art || !(it.tracks||[]).length);
+
+async function backfill(){
+  if(filling){ filling = false; return; }          /* second tap = stop */
+  if(!DB.token){ toast('Add your Discogs token in Setup first.'); return; }
+
+  const todo = DB.items.filter(needsFill);
+  if(!todo.length){
+    toast('Nothing to fill in — every record with a Discogs ID already has its artwork and tracklist.', 4200);
+    return;
+  }
+  const mins = Math.max(1, Math.round(todo.length * 1.1 / 60));
+  if(!confirm(`Fill in artwork and tracklists for ${todo.length} record${todo.length===1?'':'s'}?\n\n`
+            + `Discogs allows about one request a second, so this takes roughly ${mins} minute${mins===1?'':'s'}. `
+            + `You can carry on using Crate while it runs, and stop it any time.`)) return;
+
+  const btn = $('#btnFill'), label = btn.textContent;
+  filling = true; spin(true);
+  let done = 0, failed = 0;
+
+  for(const stub of todo){
+    if(!filling) break;
+    btn.textContent = `Stop (${done + failed + 1} of ${todo.length})`;
+    try{
+      const rel = await fetchRelease(stub.id);
+      const o = DB.items.find(x => x.uid === stub.uid);
+      if(!o) continue;                              /* deleted while we ran */
+      if(!o.art && rel.images?.[0]) o.art = rel.images[0].uri150 || rel.images[0].uri;
+      const fresh = flatTracks(rel.tracklist);
+      if(fresh.length) o.tracks = mergeTracks(fresh, o.tracks);
+      o.low     = typeof rel.lowest_price === 'number' ? rel.lowest_price : null;
+      o.forSale = rel.num_for_sale ?? null;
+      o.have    = rel.community?.have ?? null;
+      o.want    = rel.community?.want ?? null;
+      if(!o.country)          o.country = rel.country || '';
+      if(!(o.genres||[]).length) o.genres = (rel.genres||[]).concat(rel.styles||[]);
+      if(!o.year)             o.year = rel.year || (rel.released||'').slice(0,4) || '';
+      if(!o.format)           o.format = (rel.formats||[]).map(f => [f.name, f.text, (f.descriptions||[]).join(' ')].filter(Boolean).join(' ')).join(', ');
+      o.priced = Date.now();
+      done++; save();
+    }catch(e){
+      failed++;
+      if(e.message === 'NO_TOKEN' || e.message === 'BAD_TOKEN'){ toast(friendly(e)); break; }
+    }
+    if(done && done % 10 === 0) renderAll();        /* show progress as it lands */
+  }
+
+  const stopped = !filling;                          /* false = ran to the end */
+  filling = false; btn.textContent = label;
+  spin(false); save(); renderAll();
+  toast(`${stopped ? 'Stopped — filled in' : 'Filled in'} ${done} record${done===1?'':'s'}`
+      + (failed ? ` · ${failed} couldn't be fetched` : ''), 4600);
 }
 
 function download(name, data, type){
@@ -1328,6 +1389,7 @@ $('#btnDj').onclick = () => {
   download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
 };
 let importMode = 'csv';
+$('#btnFill').onclick = backfill;
 $('#btnImport').onclick = () => { importMode='csv'; $('#file').accept='.csv'; $('#file').click(); };
 $('#btnRestore').onclick = () => { importMode='json'; $('#file').accept='.json'; $('#file').click(); };
 $('#file').onchange = e => {
