@@ -99,6 +99,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 #video{width:100%;height:100%;object-fit:cover;display:block}
 .reticle{position:absolute;inset:18% 10%;border:2px solid rgba(255,95,31,.9);
   border-radius:6px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+/* reading a whole cover wants the full frame, not the barcode slot */
+#stage.wide .reticle{inset:4%}
 .reticle::after{content:"";position:absolute;left:0;right:0;height:2px;
   background:var(--sticker);box-shadow:0 0 12px var(--sticker);
   animation:sweep 2.2s ease-in-out infinite}
@@ -369,7 +371,12 @@ nav button.on{color:var(--sticker)}
 
   <div style="margin-top:12px" class="row">
     <button class="btn" id="btnCam">Scan barcodes</button>
+    <button class="btn" id="btnRead" style="display:none">Read it</button>
     <button class="btn quiet" id="btnStop" style="display:none">Stop camera</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button class="btn quiet" id="btnOcrCat">Read cat. no.</button>
+    <button class="btn quiet" id="btnOcrCover">Read cover</button>
   </div>
 
   <label class="f" for="manual">Or type a barcode, catalogue number or title</label>
@@ -377,7 +384,7 @@ nav button.on{color:var(--sticker)}
     <input type="text" id="manual" placeholder="5033197130729 / TIDY123 / Binary Finary" autocomplete="off">
     <button class="btn" id="btnFind" style="flex:0 0 88px">Find</button>
   </div>
-  <p class="hint" style="margin:8px 0 0">Find shows you every pressing Discogs has, so you can pick the one you own. Camera scanning skips the asking and queues them.</p>
+  <p class="hint" style="margin:8px 0 0">Find shows you every pressing Discogs has, so you can pick the one you own. Camera scanning skips the asking and queues them, closing the camera once it has a barcode.</p>
   <div class="row" style="margin-top:8px">
     <button class="btn quiet" id="btnPaste">Paste Discogs link</button>
     <button class="btn quiet" id="btnBlank">Add by hand</button>
@@ -579,7 +586,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.1';
+const APP_VERSION = '0.12.2';
 
 const mem = {};
 const store = {
@@ -1226,17 +1233,31 @@ async function addChosen(hit, code){
 let stream=null, detector=null, zx=null, rafId=null, recent=new Map();
 
 function accept(code){
+  /* ZXing's callback can fire again between the hit and the camera
+     actually releasing, so ignore anything after the first. */
+  if(!stream) return;
   const now = Date.now();
   if(recent.get(code) && now - recent.get(code) < 4000) return;
   recent.set(code, now);
   if(navigator.vibrate) navigator.vibrate(35);
   $('#stageNote').textContent = 'Got ' + code;
   enqueue(code);
+  /* One sleeve, one scan: close the camera on a hit rather than leaving
+     the user to reach for Stop. The lookup carries on in the queue below. */
+  stopCam();
+  toast('Got ' + code + ' — looking it up');
 }
 
-async function startCam(){
+async function startCam(mode){
+  camMode = mode === 'ocr' ? 'ocr' : 'barcode';
   $('#stage').classList.add('on');
+  $('#stage').classList.toggle('wide', camMode === 'ocr' && ocrKind === 'cover');
   $('#btnCam').style.display='none'; $('#btnStop').style.display='';
+  $('#btnRead').style.display = camMode === 'ocr' ? '' : 'none';
+  /* say what to do straight away, not once the camera has warmed up */
+  if(camMode === 'ocr') $('#stageNote').textContent = ocrKind === 'catno'
+    ? 'Fill the box with the catalogue number, then tap Read it'
+    : 'Fit the whole sleeve in the frame, then tap Read it';
   try{
     stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}}});
   }catch(e){
@@ -1245,6 +1266,11 @@ async function startCam(){
   }
   const v = $('#video'); v.srcObject = stream; await v.play();
 
+  /* OCR reads one frame you choose, rather than hunting every frame:
+     it is far more accurate on a still you have lined up, and it
+     doesn't cook the battery. */
+  if(camMode === 'ocr') return;
+
   if('BarcodeDetector' in window){
     try{
       detector = new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39']});
@@ -1252,6 +1278,7 @@ async function startCam(){
       const tick = async () => {
         if(!stream) return;
         try{ const b = await detector.detect(v); if(b.length) accept(b[0].rawValue); }catch(e){}
+        if(!stream) return;               /* accept() closed the camera on a hit */
         rafId = requestAnimationFrame(tick);
       };
       tick(); return;
@@ -1284,7 +1311,138 @@ function stopCam(){
   if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
   $('#video').srcObject=null;
   $('#stage').classList.remove('on');
+  $('#stage').classList.remove('wide');
   $('#btnCam').style.display=''; $('#btnStop').style.display='none';
+  $('#btnRead').style.display='none';
+}
+
+/* ══════════════════════════════════════════════════════════
+   reading a sleeve — Tesseract, fetched on demand like ZXing
+   Two jobs, one engine:
+   • cat. no. — a short code on the spine or centre label, so it
+     gets the reticle crop, a character whitelist and single-line
+     mode, and feeds the catno branch of findRelease().
+   • cover — artist and title set large, so it gets the whole
+     frame and ordinary prose settings, and feeds the free-text
+     branch, ending at the same picker a typed search uses.
+   Matching the artwork itself is not on the table: Discogs has no
+   image search, so there is nothing to send a photograph to.
+   Reading what is printed on the sleeve is the nearest thing.
+   ══════════════════════════════════════════════════════════ */
+const OCR_SDK = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+let ocrWorker = null, ocrBusy = false, camMode = 'barcode', ocrKind = 'catno';
+
+async function ocrReady(){
+  if(ocrWorker) return ocrWorker;
+  if(!window.Tesseract){
+    await new Promise((ok, bad) => {
+      const s = document.createElement('script');
+      s.src = OCR_SDK; s.onload = ok; s.onerror = bad; document.head.appendChild(s);
+    });
+  }
+  ocrWorker = await Tesseract.createWorker('eng');
+  return ocrWorker;
+}
+
+/* The video is object-fit:cover inside a 4:3 stage, so some of the
+   camera frame is off-screen. Work back to source pixels or the crop
+   drifts away from whatever you carefully lined up in the reticle. */
+function grabFrame(tight){
+  const v = $('#video'), box = $('#stage').getBoundingClientRect();
+  const vw = v.videoWidth, vh = v.videoHeight;
+  if(!vw || !vh) return null;
+  const scale = Math.max(box.width / vw, box.height / vh);
+  const visW = box.width / scale, visH = box.height / scale;
+  const ox = (vw - visW) / 2, oy = (vh - visH) / 2;
+  const fx = tight ? 0.10 : 0.04, fy = tight ? 0.18 : 0.04;
+  const sw = visW * (1 - fx * 2), sh = visH * (1 - fy * 2);
+  /* Tesseract wants roughly 30px of x-height; sleeve type photographed
+     at arm's length is well under that, so upscale the crop */
+  const up = Math.min(3, Math.max(1, 1500 / sw));
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw * up); c.height = Math.round(sh * up);
+  c.getContext('2d').drawImage(v, ox + visW * fx, oy + visH * fy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+
+/* Grey it, then stretch the histogram. Sleeve print is often low
+   contrast behind plastic, and Tesseract does far better on clean
+   black-on-white than on a grey-on-grey photograph. */
+function boostContrast(c){
+  const g = c.getContext('2d'), im = g.getImageData(0, 0, c.width, c.height), d = im.data;
+  let min = 255, max = 0;
+  for(let i = 0; i < d.length; i += 4){
+    const y = (d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114) | 0;
+    d[i] = d[i+1] = d[i+2] = y;
+    if(y < min) min = y;
+    if(y > max) max = y;
+  }
+  const span = Math.max(1, max - min);
+  for(let i = 0; i < d.length; i += 4){
+    const y = Math.max(0, Math.min(255, ((d[i] - min) * 255 / span) | 0));
+    d[i] = d[i+1] = d[i+2] = y;
+  }
+  g.putImageData(im, 0, 0);
+  return c;
+}
+
+const tidyCatno = s => String(s||'').toUpperCase()
+  .replace(/[^A-Z0-9 \-\/\.]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/* Whatever is set largest on a cover is nearly always the artist and
+   the title, and Discogs' free-text search wants exactly those two. */
+function tidyCover(s){
+  const lines = String(s||'').split('\n')
+    .map(l => l.replace(/[^A-Za-z0-9&'\- ]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(l => l.length >= 3 && /[A-Za-z]/.test(l));
+  return lines.sort((a, b) => b.length - a.length).slice(0, 2).join(' ').trim();
+}
+
+async function readNow(){
+  if(ocrBusy || !stream) return;
+  const tight = ocrKind === 'catno';
+  const shot = grabFrame(tight);
+  if(!shot){ toast('Camera is still warming up — give it a second'); return; }
+  ocrBusy = true; spin(true);
+  stopCam();                    /* one look, then close — same as a barcode hit */
+  toast(window.Tesseract ? 'Reading…' : 'Fetching the text reader…', 3000);
+  try{
+    if(tight) boostContrast(shot);
+    const w = await ocrReady();
+    await w.setParameters(tight
+      ? {tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ', tessedit_pageseg_mode:'7'}
+      : {tessedit_char_whitelist:'', tessedit_pageseg_mode:'6'});
+    const {data} = await w.recognize(shot);
+    const text = tight ? tidyCatno(data.text) : tidyCover(data.text);
+    spin(false); ocrBusy = false;
+    if(!text){ toast('Nothing legible there — more light, and fill the box', 4400); return; }
+    confirmRead(text, Math.round(data.confidence || 0));
+  }catch(e){
+    spin(false); ocrBusy = false;
+    toast('The text reader needs an internet connection the first time', 4600);
+  }
+}
+
+/* Text read off a photographed sleeve is never certain enough to
+   search blind, so it proposes and you confirm. Cheap to do now that
+   the camera closes after every read anyway. */
+function confirmRead(text, conf){
+  const kind = ocrKind === 'catno' ? 'catalogue number' : 'cover';
+  $('#sheetBody').innerHTML = `
+    <h3 style="margin:0 0 4px">Read off the ${kind}</h3>
+    <p class="hint" style="margin:0 0 12px">${conf}% sure. Fix it if it has come out wrong — then Discogs shows you every pressing that matches, same as a typed search.</p>
+    <input type="text" id="ocrText" value="${esc(text)}" autocomplete="off" spellcheck="false">
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="ocrGo">Search Discogs</button>
+      <button class="btn quiet" id="ocrAgain">Have another go</button>
+    </div>`;
+  $('#ocrGo').onclick = () => {
+    const v = $('#ocrText').value.trim();
+    closeSheet();
+    if(v) searchAndChoose(v);
+  };
+  $('#ocrAgain').onclick = () => { closeSheet(); startCam('ocr'); };
+  $('#scrim').classList.add('on'); $('#sheet').classList.add('on');
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2129,8 +2287,11 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   window.scrollTo(0,0);
 });
 
-$('#btnCam').onclick = startCam;
+$('#btnCam').onclick = () => startCam('barcode');
 $('#btnStop').onclick = stopCam;
+$('#btnRead').onclick = readNow;
+$('#btnOcrCat').onclick   = () => { ocrKind = 'catno'; startCam('ocr'); };
+$('#btnOcrCover').onclick = () => { ocrKind = 'cover'; startCam('ocr'); };
 $('#btnFind').onclick = () => {
   const v = $('#manual').value.trim();
   if(!v) return toast('Type a barcode, cat number or title first');
@@ -2594,7 +2755,8 @@ $('#btnHelp').onclick = () => {
   $('#sheetBody').innerHTML = `
     <h3 style="margin:0 0 10px">How Crate works</h3>
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
-    <p class="hint"><b>Scans queue up.</b> Keep the camera running down a whole shelf. Crate resolves them one a second in the background so Discogs never throttles you.</p>
+    <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
+    <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
     <p class="hint"><b>BPM and key are yours to enter.</b> No database covers 90s 12"s properly, so open a record and type them in per track — or hit Tap along with the record and Crate works the tempo out. Keys use the Camelot wheel, with the musical key shown next to each one.</p>
