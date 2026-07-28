@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.4.1 - 2026-07-28 14:19
+
+Stop shelf tiles triggering the remove-shelf handler
+
+- Modified `crate.html` (+7/-5)
+
 ## 0.4.0 - 2026-07-28 14:14
 
 Show each shelf as its own crate tile, tap to filter and drag to reorder

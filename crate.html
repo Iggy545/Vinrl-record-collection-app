@@ -1004,7 +1004,7 @@ function renderShelfGrid(){
       return `<i style="background:linear-gradient(180deg,hsl(${h} 36% 32%),hsl(${h} 30% 16%))"></i>`;
     }).join('');
     return `<div class="shelfTile${items.length ? '' : ' empty'}${s === active ? ' on' : ''}"
-        data-i="${i}" data-shelf="${esc(s)}">
+        data-i="${i}" data-shelf-name="${esc(s)}">
       <div class="art">
         <div class="spines">${bars}</div>
         <div class="count"><b>${items.length}</b></div>
@@ -1030,7 +1030,7 @@ function renderFilters(){
   $('#shelfList').innerHTML = DB.shelves.map((s,i)=>
     `<div class="q"><div class="code">${esc(s)}</div>
      <div class="st">${DB.items.filter(x=>x.shelf===s).length} records</div>
-     ${DB.shelves.length>1?`<button class="ghost" data-shelf="${i}" style="margin-left:10px">remove</button>`:''}</div>`).join('');
+     ${DB.shelves.length>1?`<button class="ghost" data-shelf-remove="${i}" style="margin-left:10px">remove</button>`:''}</div>`).join('');
 }
 
 function bars(map, host, fmt = v=>v){
@@ -1497,9 +1497,11 @@ $('#clearF').onclick = () => {
 document.addEventListener('click', e => {
   const rec = e.target.closest('.rec, .spine');
   if(rec){ openSheet(rec.dataset.uid); return; }
-  const sh = e.target.closest('[data-shelf]');
+  /* the remove button only - matching a bare [data-shelf] here once caught
+     the shelf tiles too, and deleted whatever shelf sat at that index */
+  const sh = e.target.closest('[data-shelf-remove]');
   if(sh){
-    const i = +sh.dataset.shelf, name = DB.shelves[i];
+    const i = +sh.dataset.shelfRemove, name = DB.shelves[i];
     if(!confirm('Remove shelf "'+name+'"? Records move to '+(DB.shelves.find(s=>s!==name))+'.')) return;
     DB.shelves.splice(i,1);
     DB.items.forEach(x => { if(x.shelf===name) x.shelf = DB.shelves[0]; });
@@ -1600,7 +1602,7 @@ $('#btnShelfEdit').onclick = () => {
     const tile = e.target.closest('.shelfTile');
     if(!tile) return;
     const sel = $('#shelfFilter');
-    sel.value = sel.value === tile.dataset.shelf ? '' : tile.dataset.shelf;
+    sel.value = sel.value === tile.dataset.shelfName ? '' : tile.dataset.shelfName;
     renderList(); renderShelfGrid();
     $('#grid').scrollIntoView({behavior:'smooth', block:'start'});
   });
