@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.1 - 2026-07-28 22:24
+
+Add handoff notes for picking the project up in a new session
+
+- Added `docs/HANDOFF.md` (+128/-0)
+
 ## 0.12.0 - 2026-07-28 18:18
 
 Show every Discogs match when you search, and let you pick the pressing
