@@ -379,6 +379,15 @@ nav button.on{color:var(--sticker)}
     <button class="btn quiet" id="btnOcrCover">Read cover</button>
   </div>
 
+  <label class="f" for="fileShelf">File anything new into</label>
+  <div class="row">
+    <select id="fileShelf"></select>
+    <select id="fileAt" style="flex:0 0 42%">
+      <option value="end">at the back</option>
+      <option value="start">at the front</option>
+    </select>
+  </div>
+
   <label class="f" for="manual">Or type a barcode, catalogue number or title</label>
   <div class="row">
     <input type="text" id="manual" placeholder="5033197130729 / TIDY123 / Binary Finary" autocomplete="off">
@@ -586,7 +595,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.3';
+const APP_VERSION = '0.12.4';
 
 const mem = {};
 const store = {
@@ -1032,8 +1041,8 @@ function toItem(rel, scanned){
     want: rel.community?.want ?? null,
     barcode: scanned || '',
     media: 'VG+', sleeve: 'VG+',
-    paid: null, notes: '', shelf: DB.shelves[0] || 'Main',
-    slot: nextSlot(DB.shelves[0] || 'Main'),      /* lands at the end of the shelf */
+    paid: null, notes: '', shelf: fileShelf(),
+    slot: nextSlot(fileShelf()),                  /* fileNew() has the final say */
     added: new Date().toISOString(),
     priced: Date.now()
   };
@@ -1117,7 +1126,7 @@ async function pump(){
       const rel = await fetchRelease(hits[0].id);
       const it = toItem(rel, job.code);
       const dup = DB.items.find(x => x.id === it.id);
-      DB.items.unshift(it); save();
+      fileNew(it); save();
       job.state='done';
       job.note = (dup ? 'dupe · ' : '') + it.artist + ' — ' + it.title;
       job.uid = it.uid;
@@ -1218,7 +1227,7 @@ async function addChosen(hit, code){
     const rel = await fetchRelease(hit.id);
     const it = toItem(rel, isBarcode(code) ? code.trim() : '');
     const dup = DB.items.some(x => x.id === it.id);
-    DB.items.unshift(it);
+    fileNew(it);
     save(); renderAll();
     toast((dup ? 'Added another copy · ' : 'Added · ') + it.artist + ' — ' + it.title, 4200);
   }catch(e){
@@ -1551,6 +1560,37 @@ function nextSlot(shelf){
 }
 const renumber = ordered => ordered.forEach((it, i) => { it.slot = i + 1; });
 
+/* ── where new records land ─────────────────────────────────
+   Every way of adding a record — camera, Find, OCR, by hand —
+   files it the same way, set once on the Scan view rather than
+   asked per record, which would make scanning a shelf a chore.
+   Kept on DB so it survives a reload and rides along in a
+   backup; deliberately not synced, since which crate you are
+   filling is a thing about the device in your hand.
+   The CSV import is exempt: it carries its own Shelf column. */
+function fileShelf(){
+  const s = DB.fileTo && DB.fileTo.shelf;
+  return DB.shelves.includes(s) ? s : (DB.shelves[0] || 'Main');
+}
+const fileAtStart = () => !!(DB.fileTo && DB.fileTo.at === 'start');
+
+/* Filing at the front means everything already on that shelf shifts
+   down one, so the whole shelf is renumbered dense 1..n afterwards —
+   the same guarantee arranging by hand gives. */
+function fileNew(it){
+  const shelf = fileShelf();
+  it.shelf = shelf;
+  if(fileAtStart()){
+    it.slot = 0;                      /* sorts ahead of slot 1 */
+    DB.items.unshift(it);
+    renumber(DB.items.filter(i => i.shelf === shelf).sort(bySlot));
+  }else{
+    it.slot = nextSlot(shelf);
+    DB.items.unshift(it);
+  }
+  return it;
+}
+
 /* Renumber from what's actually on screen, one shelf at a time. On the
    all-shelves view the list spans several shelves, so each is numbered
    from the order its own records appear in — a record never picks up a
@@ -1834,6 +1874,12 @@ function renderFilters(){
   kf.innerHTML = '<option value="">Any key</option>' + CAMELOT.map(k =>
     `<option value="${k}">${k} · ${KEYNAME[k]}${tally[k]?' ('+tally[k]+')':''}</option>`).join('');
   kf.value = keepK;
+  const fs = $('#fileShelf');
+  if(fs){
+    fs.innerHTML = DB.shelves.map(s=>`<option>${esc(s)}</option>`).join('');
+    fs.value = fileShelf();                 /* falls back if the shelf has gone */
+    $('#fileAt').value = fileAtStart() ? 'start' : 'end';
+  }
   $('#shelfList').innerHTML = DB.shelves.map((s,i)=>
     `<div class="q"><div class="code">${esc(s)}</div>
      <div class="st">${DB.items.filter(x=>x.shelf===s).length} records</div>
@@ -2317,15 +2363,14 @@ $('#btnPaste').onclick = async () => {
 $('#btnBlank').onclick = () => {
   const artist = prompt('Artist'); if(artist===null) return;
   const title = prompt('Title'); if(title===null) return;
-  DB.items.unshift({
+  const it = fileNew({
     uid:'m'+Date.now(), id:0, artist:artist||'Unknown artist', title:title||'Untitled',
     year:'', label:'', catno:'', country:'', format:'Vinyl', genres:[], art:'', tracks:[],
     low:null, forSale:null, have:null, want:null, barcode:'', media:'VG+', sleeve:'VG+',
-    paid:null, notes:'Added by hand', shelf:DB.shelves[0]||'Main',
-    slot: nextSlot(DB.shelves[0]||'Main'),
+    paid:null, notes:'Added by hand', shelf:'', slot:0,
     added:new Date().toISOString(), priced:0
   });
-  save(); renderAll(); toast('Added');
+  save(); renderAll(); toast('Added to ' + it.shelf + ', position ' + it.slot);
 };
 
 ['#q','#sort','#shelfFilter','#fmtFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic'].forEach(s => {
@@ -2375,6 +2420,9 @@ document.addEventListener('click', e => {
     DB.shelves[i] = to;
     let n = 0;
     DB.items.forEach(x => { if(x.shelf === from){ x.shelf = to; n++; } });
+    /* the filing target is held by name too, so it has to follow or new
+       records would quietly start landing on the first shelf instead */
+    if(DB.fileTo && DB.fileTo.shelf === from) DB.fileTo.shelf = to;
     save(); renderAll();
     /* the filter dropdown was rebuilt around the new name, so a filter
        pointing at the old one would silently fall back to All shelves */
@@ -2398,6 +2446,14 @@ $('#btnTest').onclick = async () => {
   }catch(e){ $('#tokState').innerHTML = '<span style="color:var(--bad)">'+esc(friendly(e))+'</span>'; }
   spin(false);
 };
+
+$('#fileShelf').onchange = () => {
+  DB.fileTo = {shelf: $('#fileShelf').value, at: $('#fileAt').value};
+  save();
+  toast('New records file into ' + DB.fileTo.shelf +
+        (DB.fileTo.at === 'start' ? ', at the front' : ', at the back'), 3000);
+};
+$('#fileAt').onchange = $('#fileShelf').onchange;
 
 $('#btnShelf').onclick = () => {
   const v = $('#newShelf').value.trim();
@@ -2779,6 +2835,7 @@ $('#btnHelp').onclick = () => {
     <h3 style="margin:0 0 10px">How Crate works</h3>
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
+    <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
