@@ -218,11 +218,16 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($origin)) {
 }
 
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
-git push --follow-tags origin $branch 2>&1 | ForEach-Object { Write-Info $_ }
+
+# Branch and tags go up as two separate pushes, not one --follow-tags push.
+# Combined pushes were repeatedly failing to trigger the GitHub Pages
+# build, leaving the live site stale while the repo was up to date.
+git push origin $branch 2>&1 | ForEach-Object { Write-Info $_ }
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Push to origin failed - the commit is saved locally. It'll go up on the next successful sync."
     exit 0
 }
+git push --tags origin 2>&1 | ForEach-Object { Write-Info $_ }
 
 Write-Info "Pushed v$next to origin/$branch."
 exit 0

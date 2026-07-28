@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.10.1 - 2026-07-28 18:00
+
+Push branch and tags separately so GitHub Pages actually rebuilds
+
+- Modified `scripts/sync.ps1` (+6/-1)
+
 ## 0.10.0 - 2026-07-28 17:54
 
 Tap to pick up a record and tap to place it, so arranging works on touch
