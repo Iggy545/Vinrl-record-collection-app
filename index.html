@@ -140,6 +140,12 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
   color:rgba(255,255,255,.92);text-shadow:0 1px 2px rgba(0,0,0,.8)}
 .spine .tab{position:absolute;top:0;left:0;right:0;height:5px;background:rgba(255,255,255,.25)}
 .crate-empty{padding:34px 16px;text-align:center;color:var(--dust);font-size:14px}
+/* arranging: the rail must stop scrolling under the finger mid-drag */
+.crate.editing{touch-action:none}
+.crate.editing .spine{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.crate.editing .spine:hover{transform:none}
+.spine.drag{animation:none;transform:translateY(-14px);z-index:5;cursor:grabbing;
+  outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
 
 /* ── grid ─────────────────────────────────────────────────── */
 .tools{display:flex;gap:8px;margin:14px 0}
@@ -360,7 +366,11 @@ nav button.on{color:var(--sticker)}
   </div>
   <div class="shelfGrid" id="shelfGrid"></div>
 
-  <div class="eyebrow">Flick through</div>
+  <div class="shelfhead">
+    <div class="eyebrow" id="crateNote">Flick through</div>
+    <div class="spacer"></div>
+    <button class="ghost" id="btnCrateArrange">arrange</button>
+  </div>
   <div class="crate-rail"><div class="crate" id="crate"></div></div>
 
   <div class="toggle" id="mode">
@@ -1162,10 +1172,41 @@ function renderStrip(){
     : `No prices yet. Add your Discogs token in Setup and scan something.`;
 }
 
+/* ── the rail is the physical crate ─────────────────────────
+   Always in shelf order and filtered to the shelf you're looking at,
+   so a spine's position on screen is its position on the shelf — which
+   is what makes dragging one mean anything. */
+let crateEdit = false;
+
+function crateList(){
+  const shelf = $('#shelfFilter') ? $('#shelfFilter').value : '';
+  return DB.items
+    .filter(i => !shelf || i.shelf === shelf)
+    .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b)
+                   || (a.added||'').localeCompare(b.added||''))
+    .slice(0, 150);
+}
+
+function updateCrateBar(){
+  const shelf = $('#shelfFilter') ? $('#shelfFilter').value : '';
+  if(!shelf) crateEdit = false;
+  const btn = $('#btnCrateArrange');
+  if(btn){
+    btn.style.display = shelf ? '' : 'none';
+    btn.textContent = crateEdit ? 'done' : 'arrange';
+  }
+  const note = $('#crateNote');
+  if(note) note.textContent = !shelf ? 'Flick through — pick a shelf to reorder'
+    : crateEdit ? 'Drag the spines into the order you want'
+    : 'Flick through · shelf ' + shelf;
+  $('#crate').classList.toggle('editing', crateEdit);
+}
+
 function renderCrate(){
   const el = $('#crate');
+  updateCrateBar();
   if(!DB.items.length){ el.innerHTML = '<div class="crate-empty">Empty crate. Go and scan something.</div>'; return; }
-  el.innerHTML = DB.items.slice(0,80).map(it => {
+  el.innerHTML = crateList().map(it => {
     const h = hue(it.artist + it.label);
     return `<button class="spine" data-uid="${it.uid}"
       style="background:linear-gradient(90deg,hsl(${h} 34% 26%),hsl(${h} 30% 17%))"
@@ -1421,11 +1462,14 @@ function updateArrangeBar(){
 function renderList(){
   $('#grid').style.display  = MODE==='sleeves' ? '' : 'none';
   $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
+  renderCrate();
   updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
 }
-/* renderShelfGrid reads the shelf filter, so it follows renderFilters */
-function renderAll(){ renderStrip(); renderCrate(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); }
+/* renderShelfGrid and the rail both read the shelf filter, so they follow
+   renderFilters. renderList draws the rail too, so changing the shelf
+   filter reorders the spines as well as the grid. */
+function renderAll(){ renderStrip(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); }
 
 /* ── detail sheet ─────────────────────────────────────────── */
 let openUid = null;
@@ -2042,6 +2086,79 @@ $('#btnArrange').onclick = () => {
   /* while arranging, a tap must not open the record sheet */
   grid.addEventListener('click', e => {
     if(!recEdit) return;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+})();
+
+/* ── flick-through rail: drag a spine to move the record ────
+   The rail scrolls horizontally, so while arranging we take over the
+   pointer (touch-action:none in CSS) and nudge the scroll ourselves
+   near the edges — otherwise you could only ever move a record as far
+   as the visible window. */
+$('#btnCrateArrange').onclick = () => {
+  crateEdit = !crateEdit;
+  updateCrateBar();
+};
+
+(function wireCrateDrag(){
+  const rail = $('#crate');
+  let dragEl = null, from = -1, moved = false;
+
+  const spines = () => [...rail.querySelectorAll('.spine')];
+
+  rail.addEventListener('pointerdown', e => {
+    if(!crateEdit) return;
+    const sp = e.target.closest('.spine');
+    if(!sp) return;
+    dragEl = sp; moved = false;
+    from = spines().indexOf(sp);
+    try{ sp.setPointerCapture(e.pointerId); }catch(err){}
+    sp.classList.add('drag');
+    e.preventDefault();
+  });
+
+  rail.addEventListener('pointermove', e => {
+    if(!dragEl) return;
+    e.preventDefault();
+
+    /* creep along when the finger sits near either end */
+    const box = rail.getBoundingClientRect();
+    if(e.clientX < box.left + 44)       rail.scrollLeft -= 12;
+    else if(e.clientX > box.right - 44) rail.scrollLeft += 12;
+
+    const list = spines();
+    const over = list.find(c => {
+      if(c === dragEl) return false;
+      const r = c.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right;
+    });
+    if(!over) return;
+    const to = list.indexOf(over);
+    rail.insertBefore(dragEl, to < from ? over : over.nextSibling);
+    from = to; moved = true;
+  });
+
+  const drop = () => {
+    if(!dragEl) return;
+    dragEl.classList.remove('drag');
+    dragEl = null;
+    if(!moved) return;
+    const ordered = spines()
+      .map(c => DB.items.find(i => i.uid === c.dataset.uid))
+      .filter(Boolean);
+    renumber(ordered);
+    save();
+    renderShelfGrid();
+    if(MODE === 'sleeves' && $('#sort').value === 'shelf') renderGrid();
+    toast('Order saved');
+  };
+  rail.addEventListener('pointerup', drop);
+  rail.addEventListener('pointercancel', drop);
+
+  /* while arranging, a tap on a spine must not open the record sheet */
+  rail.addEventListener('click', e => {
+    if(!crateEdit) return;
     e.stopPropagation();
     e.preventDefault();
   }, true);
