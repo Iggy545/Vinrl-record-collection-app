@@ -20,6 +20,24 @@ $RECYCLE.BIN/
 tmp/
 sync.log
 
-# Local backups / exports you don't want published
+# ── Your collection data — must never reach GitHub ──────────────────
+# scripts/sync.ps1 runs `git add -A`, so anything sitting in this folder
+# gets committed and pushed on its own. These are the files Crate writes:
+#   crate-backup.json   the whole database INCLUDING your Discogs token
+#   crate-collection.csv / crate-dj-sheet.csv   your records
+crate-backup*.json
+crate-collection*.csv
+crate-dj-sheet*.csv
+
+# Belt and braces: no spreadsheet or JSON data file anywhere in the repo.
+# If you ever genuinely need to commit one: git add -f <file>
+*.csv
+*.json
+
+# data/ is for exports and seed files you keep locally, never published
+data/*
+!data/.gitkeep
+
+# Local backups
 backups/
 *.bak
