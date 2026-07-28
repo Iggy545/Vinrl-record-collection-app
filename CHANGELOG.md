@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.10.0 - 2026-07-28 17:54
+
+Tap to pick up a record and tap to place it, so arranging works on touch
+
+- Modified `index.html` (+97/-11)
+
 ## 0.9.2 - 2026-07-28 17:37
 
 Label the two arrange buttons distinctly and show the app version in Setup

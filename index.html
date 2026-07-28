@@ -140,12 +140,18 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
   color:rgba(255,255,255,.92);text-shadow:0 1px 2px rgba(0,0,0,.8)}
 .spine .tab{position:absolute;top:0;left:0;right:0;height:5px;background:rgba(255,255,255,.25)}
 .crate-empty{padding:34px 16px;text-align:center;color:var(--dust);font-size:14px}
-/* arranging: the rail must stop scrolling under the finger mid-drag */
-.crate.editing{touch-action:none}
+/* The rail keeps scrolling normally while arranging — you tap to lift a
+   record and tap again to place it, so the finger is never held down. */
 .crate.editing .spine{cursor:grab;animation:jiggle .8s ease-in-out infinite}
 .crate.editing .spine:hover{transform:none}
 .spine.drag{animation:none;transform:translateY(-14px);z-index:5;cursor:grabbing;
   outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
+/* lifted out of the crate, waiting to be put somewhere */
+.spine.picked{animation:none;transform:translateY(-20px);z-index:6;
+  outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
+.rec.picked{animation:none}
+.rec.picked .sleeve{outline:2px solid var(--sticker);outline-offset:3px}
+.rec.picked h4{color:var(--sticker)}
 
 /* ── grid ─────────────────────────────────────────────────── */
 .tools{display:flex;gap:8px;margin:14px 0}
@@ -551,7 +557,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.9.2';
+const APP_VERSION = '0.10.0';
 
 const mem = {};
 const store = {
@@ -1211,9 +1217,10 @@ function updateCrateBar(){
     btn.textContent = crateEdit ? 'done' : 'arrange records';
   }
   const note = $('#crateNote');
-  if(note) note.textContent = crateEdit
-    ? 'Drag to reorder · drop on a shelf tile to move it there'
-    : (shelf ? 'Flick through · shelf ' + shelf : 'Flick through');
+  if(note) note.textContent = !crateEdit
+    ? (shelf ? 'Flick through · shelf ' + shelf : 'Flick through')
+    : picked ? 'Now tap where it goes, or a shelf to move it'
+             : 'Tap a record to pick it up';
   $('#crate').classList.toggle('editing', crateEdit);
 }
 
@@ -1335,6 +1342,59 @@ function edgeScroll(y){
   if(y < 90) window.scrollBy(0, -18);
   else if(y > window.innerHeight - 90) window.scrollBy(0, 18);
 }
+/* ── tap to pick up, tap to place ───────────────────────────
+   Dragging a 26px spine along a rail that can't scroll is miserable on
+   a phone and fiddly with a mouse, so this is the main way to move a
+   record: tap it to lift it, then tap where it should go. Nothing is
+   captured between the two taps, so you can scroll and change shelf
+   freely in between. Dragging still works with a mouse. */
+let picked = null;              /* uid of the lifted record */
+let justDragged = 0;            /* so a drag's click isn't read as a tap */
+
+/* re-apply after any render, since the markup is rebuilt from scratch */
+function paintPicked(){
+  document.querySelectorAll('.picked').forEach(n => n.classList.remove('picked'));
+  if(!picked) return;
+  document.querySelectorAll('.rec[data-uid], .spine[data-uid]').forEach(n => {
+    if(n.dataset.uid === picked) n.classList.add('picked');
+  });
+}
+function setPicked(uid){
+  picked = uid || null;
+  paintPicked();
+  updateCrateBar(); updateArrangeBar();
+}
+
+/* drop the lifted record into the slot just before `targetUid`, moving
+   it between shelves if the target sits on a different one */
+function placeBefore(targetUid){
+  const a = DB.items.find(i => i.uid === picked);
+  const b = DB.items.find(i => i.uid === targetUid);
+  if(!a || !b || a === b) return false;
+  const from = a.shelf;
+  a.shelf = b.shelf;
+  const list = DB.items.filter(i => i.shelf === b.shelf && i.uid !== a.uid).sort(bySlot);
+  const at = list.findIndex(i => i.uid === b.uid);
+  list.splice(at < 0 ? list.length : at, 0, a);
+  renumber(list);
+  if(from !== a.shelf) renumber(DB.items.filter(i => i.shelf === from).sort(bySlot));
+  return true;
+}
+
+/* one tap on a record, in arrange mode: lift it, or place the lifted one */
+function tapRecord(uid){
+  if(!uid) return;
+  if(!picked){ setPicked(uid); return; }
+  if(picked === uid){ setPicked(null); toast('Put back'); return; }
+  if(placeBefore(uid)){
+    const done = picked;
+    setPicked(null);
+    save(); renderAll();
+    const it = DB.items.find(i => i.uid === done);
+    toast('Moved to shelf ' + it.shelf + ', position ' + it.slot, 3000);
+  }
+}
+
 function moveToShelf(item, shelfName){
   if(!item || !shelfName || shelfName === item.shelf) return false;
   const from = item.shelf;
@@ -1547,9 +1607,10 @@ function updateArrangeBar(){
   if(!usable) recEdit = false;
   $('#btnArrange').style.display = DB.shelves.length ? '' : 'none';
   $('#btnArrange').textContent = recEdit ? 'done' : 'arrange records';
-  $('#arrangeNote').textContent = recEdit
-    ? 'Drag to reorder · drop on a shelf tile to move it there'
-    : (shelf ? 'Shelf ' + shelf : 'Your order');
+  $('#arrangeNote').textContent = !recEdit
+    ? (shelf ? 'Shelf ' + shelf : 'Your order')
+    : picked ? 'Now tap where it goes, or a shelf to move it'
+             : 'Tap a record to pick it up';
   $('#grid').classList.toggle('editing', recEdit);
 }
 
@@ -1559,6 +1620,7 @@ function renderList(){
   renderCrate();
   updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
+  paintPicked();
 }
 /* renderShelfGrid and the rail both read the shelf filter, so they follow
    renderFilters. renderList draws the rail too, so changing the shelf
@@ -2110,9 +2172,21 @@ $('#btnShelfEdit').onclick = () => {
   grid.addEventListener('pointercancel', drop);
 
   grid.addEventListener('click', e => {
-    if(shelfEdit) return;                       /* rearranging, not browsing */
     const tile = e.target.closest('.shelfTile');
     if(!tile) return;
+
+    /* a record is lifted: this tap sends it to the end of that shelf */
+    if(picked){
+      const it = DB.items.find(i => i.uid === picked);
+      const to = tile.dataset.shelfName;
+      const ok = moveToShelf(it, to);
+      setPicked(null);
+      if(ok){ save(); renderAll(); toast('Moved to shelf ' + to); }
+      else { renderAll(); toast('Already on shelf ' + to); }
+      return;
+    }
+
+    if(shelfEdit) return;                       /* rearranging, not browsing */
     const sel = $('#shelfFilter');
     sel.value = sel.value === tile.dataset.shelfName ? '' : tile.dataset.shelfName;
     renderList(); renderShelfGrid();
@@ -2126,6 +2200,7 @@ $('#btnShelfEdit').onclick = () => {
    dense and the order survives a reload and syncs to your devices. */
 $('#btnArrange').onclick = () => {
   recEdit = !recEdit;
+  if(!recEdit) setPicked(null);
   updateArrangeBar();
 };
 
@@ -2193,6 +2268,7 @@ $('#btnArrange').onclick = () => {
     }
 
     if(!moved) return;
+    justDragged = Date.now();          /* the click that follows isn't a tap */
     renumberFromDom(tiles());
     save();
     renderShelfGrid();
@@ -2201,11 +2277,14 @@ $('#btnArrange').onclick = () => {
   grid.addEventListener('pointerup', drop);
   grid.addEventListener('pointercancel', drop);
 
-  /* while arranging, a tap must not open the record sheet */
+  /* same tap-to-lift, tap-to-place as the rail */
   grid.addEventListener('click', e => {
     if(!recEdit) return;
     e.stopPropagation();
     e.preventDefault();
+    if(Date.now() - justDragged < 300) return;
+    const rec = e.target.closest('.rec');
+    if(rec) tapRecord(rec.dataset.uid);
   }, true);
 })();
 
@@ -2216,6 +2295,7 @@ $('#btnArrange').onclick = () => {
    as the visible window. */
 $('#btnCrateArrange').onclick = () => {
   crateEdit = !crateEdit;
+  if(!crateEdit) setPicked(null);       /* don't leave one lifted */
   updateCrateBar();
 };
 
@@ -2288,6 +2368,7 @@ $('#btnCrateArrange').onclick = () => {
     }
 
     if(!moved) return;
+    justDragged = Date.now();          /* the click that follows isn't a tap */
     renumberFromDom(spines());
     save();
     renderShelfGrid();
@@ -2297,11 +2378,16 @@ $('#btnCrateArrange').onclick = () => {
   rail.addEventListener('pointerup', drop);
   rail.addEventListener('pointercancel', drop);
 
-  /* while arranging, a tap on a spine must not open the record sheet */
+  /* In arrange mode a tap lifts or places the record instead of opening
+     the sheet. Capture phase, so the document-wide .spine handler that
+     opens the sheet never sees it. */
   rail.addEventListener('click', e => {
     if(!crateEdit) return;
     e.stopPropagation();
     e.preventDefault();
+    if(Date.now() - justDragged < 300) return;      /* that was a drag */
+    const sp = e.target.closest('.spine');
+    if(sp) tapRecord(sp.dataset.uid);
   }, true);
 })();
 
