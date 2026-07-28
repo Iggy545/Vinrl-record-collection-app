@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.7.0 - 2026-07-28 16:19
+
+Drag records into your own order within a shelf, and import PositionInShelf
+
+- Modified `index.html` (+136/-6)
+
 ## 0.6.0 - 2026-07-28 15:59
 
 Rename the app to index.html so the site root serves it, not the README

@@ -184,13 +184,17 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .shelfTile .name{margin-top:7px;font-family:var(--mono);font-size:10.5px;color:var(--dust);
   text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .shelfTile.empty .art{opacity:.4}
+.grid.editing .rec{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.grid.editing .rec .sleeve{outline:1px dashed var(--dust);outline-offset:2px}
+.rec.drag{animation:none;opacity:.92;position:relative;z-index:5;cursor:grabbing}
+.rec.drag .sleeve{outline:2px solid var(--sticker);outline-offset:2px}
 .shelfGrid.editing .shelfTile{cursor:grab;animation:jiggle .8s ease-in-out infinite}
 .shelfGrid.editing .shelfTile .name::after{content:' ⠿';color:var(--sticker)}
 .shelfTile.drag{animation:none;transform:scale(1.06);opacity:.92;position:relative;z-index:5;
   border-color:var(--sticker);box-shadow:var(--shadow);cursor:grabbing}
 @keyframes jiggle{0%,100%{transform:rotate(-.6deg)}50%{transform:rotate(.6deg)}}
 @media (prefers-reduced-motion:reduce){
-  .shelfGrid.editing .shelfTile{animation:none}
+  .shelfGrid.editing .shelfTile,.grid.editing .rec{animation:none}
   .shelfTile.drag{transform:none}
 }
 
@@ -367,6 +371,7 @@ nav button.on{color:var(--sticker)}
   <div class="tools">
     <input type="search" id="q" placeholder="Search artist, title, label, cat no…" autocomplete="off">
     <select id="sort">
+      <option value="shelf">Shelf order — yours</option>
       <option value="added">Newest first</option>
       <option value="artist">Artist A–Z</option>
       <option value="year">Year</option>
@@ -392,6 +397,12 @@ nav button.on{color:var(--sticker)}
     </div>
     <label class="check"><input type="checkbox" id="harmonic"> Include harmonically compatible keys</label>
     <div class="lane"><span class="clearf" id="clearF" role="button" tabindex="0">Clear filters</span></div>
+  </div>
+
+  <div class="shelfhead" id="arrangeBar" style="display:none">
+    <div class="eyebrow" id="arrangeNote"></div>
+    <div class="spacer"></div>
+    <button class="ghost" id="btnArrange">arrange</button>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -947,6 +958,7 @@ function toItem(rel, scanned){
     barcode: scanned || '',
     media: 'VG+', sleeve: 'VG+',
     paid: null, notes: '', shelf: DB.shelves[0] || 'Main',
+    slot: nextSlot(DB.shelves[0] || 'Main'),      /* lands at the end of the shelf */
     added: new Date().toISOString(),
     priced: Date.now()
   };
@@ -1188,6 +1200,20 @@ function relOk(it,f){
   return true;
 }
 
+/* ── your own order within a shelf ──────────────────────────
+   `slot` is a record's place on its shelf, 1-based, matching the
+   PositionInShelf column collection apps export. Anything without one
+   sorts to the end rather than jumping to the front. */
+const slotOf = it => (typeof it.slot === 'number' && isFinite(it.slot)) ? it.slot : Infinity;
+const bySlot = (a,b) => { const x = slotOf(a), y = slotOf(b); return x === y ? 0 : x - y; };
+const shelfRank = s => { const i = DB.shelves.indexOf(s); return i < 0 ? 1e6 : i; };
+function nextSlot(shelf){
+  let max = 0;
+  DB.items.forEach(i => { if(i.shelf === shelf && slotOf(i) !== Infinity && i.slot > max) max = i.slot; });
+  return max + 1;
+}
+const renumber = ordered => ordered.forEach((it, i) => { it.slot = i + 1; });
+
 /* sleeve view — a release survives if any of its tracks passes BPM/key */
 function visible(){
   const f = filters();
@@ -1197,6 +1223,8 @@ function visible(){
     return (it.tracks||[]).some(t => bpmOk(t,f) && keyOk(t,f));
   });
   const cmp = {
+    shelf:(a,b)=> shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b)
+                  || (a.added||'').localeCompare(b.added||''),
     added:(a,b)=> (b.added||'').localeCompare(a.added||''),
     artist:(a,b)=> a.artist.localeCompare(b.artist) || (a.year+'').localeCompare(b.year+''),
     year:(a,b)=> (b.year||0) - (a.year||0),
@@ -1220,6 +1248,7 @@ function visibleTracks(){
     return bpmOk(t,f) && keyOk(t,f);
   });
   const cmp = {
+    shelf:(a,b)=> shelfRank(a.it.shelf) - shelfRank(b.it.shelf) || bySlot(a.it,b.it) || a.i - b.i,
     added:(a,b)=> (b.it.added||'').localeCompare(a.it.added||''),
     artist:(a,b)=> a.it.artist.localeCompare(b.it.artist) || a.i - b.i,
     year:(a,b)=> (b.it.year||0) - (a.it.year||0),
@@ -1369,9 +1398,30 @@ function renderStats(){
 }
 
 let MODE = 'sleeves';
+let recEdit = false;
+
+/* Rearranging only makes sense on one shelf at a time in the sleeve
+   view sorted by shelf order — anywhere else a dragged record would
+   just spring back to wherever the current sort puts it. */
+function updateArrangeBar(){
+  const bar = $('#arrangeBar');
+  if(!bar) return;
+  const usable = MODE === 'sleeves' && $('#sort').value === 'shelf';
+  bar.style.display = usable ? '' : 'none';
+  const shelf = $('#shelfFilter').value;
+  if(!usable || !shelf){ recEdit = false; }
+  $('#btnArrange').style.display = shelf ? '' : 'none';
+  $('#btnArrange').textContent = recEdit ? 'done' : 'arrange';
+  $('#arrangeNote').textContent = !shelf ? 'Pick a shelf to put it in your own order'
+    : recEdit ? 'Drag records into the order you want'
+    : 'Shelf ' + shelf;
+  $('#grid').classList.toggle('editing', recEdit);
+}
+
 function renderList(){
   $('#grid').style.display  = MODE==='sleeves' ? '' : 'none';
   $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
+  updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
 }
 /* renderShelfGrid reads the shelf filter, so it follows renderFilters */
@@ -1450,7 +1500,13 @@ function openSheet(uid){
   const patch = (k, val) => { const o = DB.items.find(x=>x.uid===uid); o[k]=val; save(); renderAll(); };
   $('#sMedia').onchange = e => { patch('media', e.target.value); openSheet(uid); };
   $('#sSleeve').onchange = e => { patch('sleeve', e.target.value); openSheet(uid); };
-  $('#sShelf').onchange = e => patch('shelf', e.target.value);
+  $('#sShelf').onchange = e => {
+    /* moving shelf puts it at the end of the new one, not at whatever
+       slot number it happened to hold on the old shelf */
+    const o = DB.items.find(x => x.uid === uid);
+    if(o) o.slot = nextSlot(e.target.value);
+    patch('shelf', e.target.value);
+  };
   $('#sPaid').onchange = e => { patch('paid', e.target.value===''?null:parseFloat(e.target.value)); openSheet(uid); };
   $('#sNotes').oninput = e => patch('notes', e.target.value);
   /* per-track BPM and key */
@@ -1625,7 +1681,8 @@ function importCsv(text){
      beats Title because some exports put "Artist - Album" in Title. */
   const pick = (r, ...names) => { for(const n of names){ const v = g(r, n); if(v) return v; } return ''; };
 
-  let added = 0, withTracks = 0;
+  let added = 0, withTracks = 0, withSlots = 0;
+  const fallbackSlot = {};                 /* per shelf, for rows with no position */
   rows.slice(1).forEach(r => {
     const artist = pick(r, 'Artist', 'ArtistSort');
     const title  = pick(r, 'AlbumTitle', 'Title');
@@ -1640,6 +1697,12 @@ function importCsv(text){
     if(tracks.length) withTracks++;
 
     const paid = parseFloat(pick(r, 'Price').replace(/[^\d.]/g, ''));
+
+    /* where it sits on the shelf; falls back to the order rows arrive in */
+    fallbackSlot[shelf] = (fallbackSlot[shelf] || 0) + 1;
+    const posn = parseInt(pick(r, 'PositionInShelf', 'Position'), 10);
+    const slot = (isFinite(posn) && posn > 0) ? posn : fallbackSlot[shelf];
+    if(isFinite(posn) && posn > 0) withSlots++;
 
     DB.items.push({
       uid:'i'+Date.now()+Math.random().toString(36).slice(2,7),
@@ -1659,7 +1722,7 @@ function importCsv(text){
       sleeve: unGM(pick(r, 'Collection Sleeve Condition')),
       paid: isFinite(paid) && paid > 0 ? paid : null,
       notes: pick(r, 'Collection Notes', 'Notes'),
-      shelf,
+      shelf, slot,
       added: pick(r, 'Date Added', 'AddedAt') || new Date().toISOString(),
       priced: 0
     });
@@ -1668,7 +1731,8 @@ function importCsv(text){
 
   save(); renderAll();
   toast(`${added} records imported`
-      + (withTracks ? ` · ${withTracks} came with tracklists` : '')
+      + (withTracks ? ` · ${withTracks} with tracklists` : '')
+      + (withSlots ? ` · shelf order kept` : '')
       + '. Tap “Fill in from Discogs” in Setup for artwork and prices.', 5600);
 }
 
@@ -1780,6 +1844,7 @@ $('#btnBlank').onclick = () => {
     year:'', label:'', catno:'', country:'', format:'Vinyl', genres:[], art:'', tracks:[],
     low:null, forSale:null, have:null, want:null, barcode:'', media:'VG+', sleeve:'VG+',
     paid:null, notes:'Added by hand', shelf:DB.shelves[0]||'Main',
+    slot: nextSlot(DB.shelves[0]||'Main'),
     added:new Date().toISOString(), priced:0
   });
   save(); renderAll(); toast('Added');
@@ -1813,7 +1878,7 @@ document.addEventListener('click', e => {
     const i = +sh.dataset.shelfRemove, name = DB.shelves[i];
     if(!confirm('Remove shelf "'+name+'"? Records move to '+(DB.shelves.find(s=>s!==name))+'.')) return;
     DB.shelves.splice(i,1);
-    DB.items.forEach(x => { if(x.shelf===name) x.shelf = DB.shelves[0]; });
+    DB.items.forEach(x => { if(x.shelf===name){ x.shelf = DB.shelves[0]; x.slot = nextSlot(DB.shelves[0]); } });
     save(); renderAll();
   }
 });
@@ -1915,6 +1980,71 @@ $('#btnShelfEdit').onclick = () => {
     renderList(); renderShelfGrid();
     $('#grid').scrollIntoView({behavior:'smooth', block:'start'});
   });
+})();
+
+/* ── records: drag into your own order on a shelf ───────────
+   Same pointer-event approach as the shelf tiles. On drop, the whole
+   visible shelf is renumbered 1..n from the DOM order, so slots stay
+   dense and the order survives a reload and syncs to your devices. */
+$('#btnArrange').onclick = () => {
+  recEdit = !recEdit;
+  updateArrangeBar();
+};
+
+(function wireRecordDrag(){
+  const grid = $('#grid');
+  let dragEl = null, from = -1, moved = false;
+
+  const tiles = () => [...grid.children].filter(c => c.classList.contains('rec'));
+
+  grid.addEventListener('pointerdown', e => {
+    if(!recEdit) return;
+    const rec = e.target.closest('.rec');
+    if(!rec) return;
+    dragEl = rec; moved = false;
+    from = tiles().indexOf(rec);
+    try{ rec.setPointerCapture(e.pointerId); }catch(err){}
+    rec.classList.add('drag');
+    e.preventDefault();
+  });
+
+  grid.addEventListener('pointermove', e => {
+    if(!dragEl) return;
+    e.preventDefault();
+    const list = tiles();
+    const over = list.find(c => {
+      if(c === dragEl) return false;
+      const r = c.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right
+          && e.clientY >= r.top  && e.clientY <= r.bottom;
+    });
+    if(!over) return;
+    const to = list.indexOf(over);
+    grid.insertBefore(dragEl, to < from ? over : over.nextSibling);
+    from = to; moved = true;
+  });
+
+  const drop = () => {
+    if(!dragEl) return;
+    dragEl.classList.remove('drag');
+    dragEl = null;
+    if(!moved) return;
+    const ordered = tiles()
+      .map(c => DB.items.find(i => i.uid === c.dataset.uid))
+      .filter(Boolean);
+    renumber(ordered);
+    save();
+    toast('Order saved');
+  };
+  grid.addEventListener('pointerup', drop);
+  grid.addEventListener('pointercancel', drop);
+
+  /* while arranging, a tap must not open the record sheet */
+  grid.addEventListener('click', e => {
+    if(!recEdit) return;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
 })();
 
 /* ── sync panel ─────────────────────────────────────────── */
