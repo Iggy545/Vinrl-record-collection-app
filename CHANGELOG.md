@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.5.0 - 2026-07-28 15:13
+
+Sync the crate across devices via Firebase, same pattern as the POS app
+
+- Modified `crate.html` (+332/-2)
+
 ## 0.4.2 - 2026-07-28 14:55
 
 Never auto-commit collection exports or backups

@@ -85,7 +85,8 @@ main{padding:0 16px}
 .row>*{flex:1}
 label.f{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--dust);margin:14px 0 6px}
-input[type=text],input[type=number],input[type=search],select,textarea{
+input[type=text],input[type=number],input[type=search],
+input[type=email],input[type=password],select,textarea{
   width:100%;background:var(--ink);border:1px solid var(--groove);
   border-radius:8px;padding:12px;font-family:var(--mono);font-size:14px}
 input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none}
@@ -456,6 +457,33 @@ nav button.on{color:var(--sticker)}
     <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling. It carries no artwork or tracklists though — Discogs doesn't put them in the export — so after importing, tap <b>Fill in from Discogs</b> to pull those in.</p>
   </div>
 
+  <div class="eyebrow">Sync across your devices</div>
+  <div class="panel">
+    <p class="hint" style="margin-top:0">Keeps this crate the same on your phone, your iPad and this computer.
+      Everything still works offline — sync just mirrors it to your own Firebase project when you're online.
+      Use the <b>same config and login as your POS app</b>; Crate keeps its records in their own place, so the two never mix.</p>
+    <label class="f" for="syncCfg">Firebase config (paste the whole snippet from your project)</label>
+    <textarea id="syncCfg" rows="7" spellcheck="false" placeholder='{
+  "apiKey": "...",
+  "authDomain": "yourproject.firebaseapp.com",
+  "projectId": "yourproject"
+}'></textarea>
+    <label class="f" for="syncCode">Collection code — type the same one on every device</label>
+    <input type="text" id="syncCode" placeholder="e.g. iggy-vinyl" autocomplete="off" spellcheck="false">
+    <label class="f" for="syncEmail">Login email</label>
+    <input type="email" id="syncEmail" placeholder="you@example.com" autocomplete="username" spellcheck="false">
+    <label class="f" for="syncPw">Password</label>
+    <input type="password" id="syncPw" placeholder="only needed the first time on a device" autocomplete="current-password">
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="btnSyncOn">Turn sync on</button>
+      <button class="btn quiet" id="btnSyncNow">Sync now</button>
+    </div>
+    <button class="btn quiet" id="btnSyncOff" style="margin-top:8px">Turn sync off</button>
+    <p class="hint" id="syncState" style="margin-bottom:0">Sync is off.</p>
+    <p class="hint" style="margin-bottom:0">Your password is never saved — only the email is. Your Discogs
+      token stays on this device too, so enter that separately on each one.</p>
+  </div>
+
   <div class="eyebrow">Shelves</div>
   <div class="panel">
     <div id="shelfList"></div>
@@ -519,7 +547,288 @@ async function load(){
   $('#curr').value = DB.curr || 'GBP';
 }
 let saveTimer;
-function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(()=>store.set('crate.db', DB), 200); }
+function save(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    store.set('crate.db', DB);
+    /* Sync is defined further down; harmless before it exists */
+    try{ if(typeof Sync !== 'undefined') Sync.onLocalChange(); }catch(e){}
+  }, 200);
+}
+
+/* ══════════════════════════════════════════════════════════
+   SYNC (Firebase Firestore) — same approach as the POS app
+   Local-first: everything works offline on localStorage. This
+   layer mirrors the crate to a Firestore workspace so a phone,
+   an iPad and a computer stay in step.
+   - Each record syncs as its OWN document, so editing different
+     records on two devices never clobbers anything.
+   - Merge rule: newest edit to a given record wins.
+   - Offline changes queue and go up on reconnect. Export backup
+     remains the fully-offline fallback.
+   Records live at workspaces/<code>/records and the shelf order
+   at workspaces/<code>/meta/crate — different names to the POS's
+   items/sales/session, so one Firebase project holds both safely.
+   ══════════════════════════════════════════════════════════ */
+var Sync = (function(){
+  const CFG='crate.sync.cfg', CODE='crate.sync.code', MAIL='crate.sync.email',
+        ON='crate.sync.on', CID='crate.sync.client', TIMES='crate.sync.times';
+  const SDK_APP ='https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js';
+  const SDK_FS  ='https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js';
+  const SDK_AUTH='https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js';
+
+  let app=null, db=null, recCol=null, metaDoc=null;
+  let listeners=[], connected=false, connecting=false;
+  let shadow={}, metaShadow='';
+
+  const ls = {
+    get(k){ try{ return localStorage.getItem(k)||''; }catch(e){ return ''; } },
+    set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+  };
+  const clientId = (() => {
+    let v = ls.get(CID);
+    if(!v){ v = Math.random().toString(36).slice(2) + Date.now().toString(36); ls.set(CID,v); }
+    return v;
+  })();
+
+  let times = (() => {
+    let o = null; try{ o = JSON.parse(ls.get(TIMES)); }catch(e){}
+    if(!o || typeof o !== 'object') o = {};
+    o.records = o.records || {}; o.meta = o.meta || 0; return o;
+  })();
+  const saveTimes = () => ls.set(TIMES, JSON.stringify(times));
+
+  const getCfg = () => { try{ return JSON.parse(ls.get(CFG)); }catch(e){ return null; } };
+  const getCode = () => ls.get(CODE);
+  const getEmail = () => ls.get(MAIL);
+  const isOn = () => ls.get(ON) === '1';
+
+  const ser = v => { try{ return JSON.stringify(v); }catch(e){ return ''; } };
+  /* Firestore rejects undefined; a JSON round-trip drops those keys */
+  const clean = v => JSON.parse(ser(v));
+  const docSafe = s => String(s||'').replace(/[\/\.\#\$\[\]]/g,'_').slice(0,120);
+
+  function setStatus(text, kind){
+    const el = $('#syncState');
+    if(!el) return;
+    el.textContent = connected ? ('Synced — ' + text) : text;
+    el.style.color = kind==='err' ? 'var(--bad)' : (kind==='ok' ? 'var(--ok)' : 'var(--dust)');
+  }
+
+  function loadScript(src){
+    return new Promise((res, rej) => {
+      if(document.querySelector(`script[data-fb="${src}"]`)) return res();
+      const s = document.createElement('script');
+      s.src = src; s.async = true; s.setAttribute('data-fb', src);
+      s.onload = res;
+      s.onerror = () => rej(new Error('Could not load Firebase — are you online?'));
+      document.head.appendChild(s);
+    });
+  }
+  async function loadSDK(){
+    if(!(window.firebase && window.firebase.firestore && window.firebase.auth)){
+      await loadScript(SDK_APP); await loadScript(SDK_FS); await loadScript(SDK_AUTH);
+    }
+    if(!(window.firebase && window.firebase.firestore)) throw new Error('Firebase failed to load');
+  }
+
+  /* ── incoming ─────────────────────────────────────────── */
+  function applyRemoteRecord(id, d){
+    if(!d) return false;
+    const key = d.key || id;                       /* real uid, not the sanitised doc id */
+    const ts = Number(d.updatedAt)||0, mine = Number(times.records[key])||0;
+    if(d.by === clientId && ts <= mine) return false;   /* our own echo */
+    if(ts < mine) return false;                         /* local is newer */
+    const at = DB.items.findIndex(x => x.uid === key);
+    if(d.deleted){ if(at >= 0) DB.items.splice(at, 1); delete shadow[key]; }
+    else {
+      if(at >= 0) DB.items[at] = d.data; else DB.items.unshift(d.data);
+      shadow[key] = ser(d.data);
+    }
+    times.records[key] = ts;
+    return true;
+  }
+  function applyRemoteMeta(d){
+    if(!d) return false;
+    const ts = Number(d.updatedAt)||0, mine = Number(times.meta)||0;
+    if(d.by === clientId && ts <= mine) return false;
+    if(ts < mine) return false;
+    let changed = false;
+    if(Array.isArray(d.shelves) && ser(d.shelves) !== ser(DB.shelves)){ DB.shelves = d.shelves; changed = true; }
+    if(d.curr && d.curr !== DB.curr){ DB.curr = d.curr; changed = true; }
+    times.meta = ts;
+    metaShadow = ser({s: DB.shelves, c: DB.curr});
+    return changed;
+  }
+
+  /* ── outgoing: diff against the shadow copy ───────────── */
+  function pushRecords(){
+    if(!connected) return;
+    const cur = {};
+    DB.items.forEach(i => { if(i && i.uid) cur[i.uid] = i; });
+    let n = 0;
+    Object.keys(cur).forEach(uid => {
+      const s = ser(cur[uid]);
+      if(shadow[uid] !== s){
+        const ts = Date.now(); times.records[uid] = ts; shadow[uid] = s; n++;
+        recCol.doc(docSafe(uid)).set({data: clean(cur[uid]), updatedAt: ts, by: clientId, deleted:false, key: uid});
+      }
+    });
+    Object.keys(shadow).forEach(uid => {
+      if(!(uid in cur)){
+        const ts = Date.now(); times.records[uid] = ts; delete shadow[uid]; n++;
+        recCol.doc(docSafe(uid)).set({updatedAt: ts, by: clientId, deleted:true, key: uid});
+      }
+    });
+    if(n) saveTimes();
+  }
+  function pushMeta(){
+    if(!connected) return;
+    const sig = ser({s: DB.shelves, c: DB.curr});
+    if(sig === metaShadow) return;
+    metaShadow = sig;
+    const ts = Date.now(); times.meta = ts; saveTimes();
+    metaDoc.set({shelves: clean(DB.shelves), curr: DB.curr, updatedAt: ts, by: clientId});
+  }
+
+  /* the debounced save() calls this on every local change */
+  function onLocalChange(){
+    if(!connected) return;
+    try{ pushRecords(); pushMeta(); }catch(e){}
+  }
+
+  function landed(){                     /* remote data arrived: persist + redraw */
+    store.set('crate.db', DB);
+    saveTimes();
+    renderAll();
+  }
+  function attachListeners(){
+    detach();
+    listeners.push(recCol.onSnapshot(snap => {
+      let touched = false;
+      snap.docChanges().forEach(ch => { if(applyRemoteRecord(ch.doc.id, ch.doc.data())) touched = true; });
+      if(touched) landed();
+    }, onErr));
+    listeners.push(metaDoc.onSnapshot(doc => {
+      if(doc.exists && applyRemoteMeta(doc.data())) landed();
+    }, onErr));
+  }
+  const onErr = () => setStatus('connection problem — retrying', 'err');
+  function detach(){ listeners.forEach(u => { try{ u(); }catch(e){} }); listeners = []; }
+
+  /* Merge everything remote into local, then set the shadow to what the
+     SERVER holds — not to what we have. The push that follows diffs
+     against it, so records only this device knows about (a fresh phone,
+     or the very first connect) get sent up. Building the shadow from
+     local data instead makes that diff empty and nothing ever uploads. */
+  async function reconcile(){
+    const rs = await recCol.get();
+    const remote = {};
+    rs.forEach(doc => { const d = doc.data(); if(d) remote[d.key || doc.id] = d; });
+    Object.keys(remote).forEach(k => applyRemoteRecord(k, remote[k]));
+
+    const ms = await metaDoc.get();
+    if(ms.exists) applyRemoteMeta(ms.data());
+
+    shadow = {};
+    Object.keys(remote).forEach(k => { if(!remote[k].deleted) shadow[k] = ser(remote[k].data); });
+
+    store.set('crate.db', DB); saveTimes();
+    renderAll();
+  }
+
+  async function connect(opts){
+    opts = opts || {};
+    if(connecting) return;
+    connecting = true;
+    const cfg = getCfg();
+    if(!cfg || !getCode()){ connecting = false; setStatus('needs setting up', 'err'); return; }
+    try{
+      setStatus('connecting…');
+      await loadSDK();
+      try{ app = firebase.apps && firebase.apps.length ? firebase.app() : firebase.initializeApp(cfg); }
+      catch(e){ app = firebase.initializeApp(cfg); }
+
+      const auth = firebase.auth(app);
+      try{ await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); }catch(e){}
+      if(!auth.currentUser){
+        const email = (opts.email || getEmail() || '').trim();
+        const pw = opts.password || '';
+        if(!email || !pw){
+          connecting = false;
+          setStatus('enter your email and password above, then tap Turn sync on', 'err');
+          if(!opts.silent) toast('Sign in to turn sync on');
+          return;
+        }
+        try{ await auth.signInWithEmailAndPassword(email, pw); }
+        catch(e){
+          connecting = false;
+          const msg = e && e.code === 'auth/invalid-credential' ? 'Wrong email or password'
+                    : e && e.code === 'auth/operation-not-allowed' ? 'Turn on Email/Password sign-in in Firebase'
+                    : (e && e.message) || 'Sign-in failed';
+          setStatus(msg, 'err');
+          if(!opts.silent) toast(msg, 4000);
+          return;
+        }
+      }
+
+      db = firebase.firestore(app);
+      try{ await db.enablePersistence({synchronizeTabs:true}); }catch(e){}
+      const ws = db.collection('workspaces').doc(docSafe(getCode()));
+      recCol  = ws.collection('records');
+      metaDoc = ws.collection('meta').doc('crate');
+
+      await reconcile();
+      connected = true;
+      pushRecords(); pushMeta();          /* send anything remote didn't have */
+      attachListeners();
+      connecting = false;
+      ls.set(ON, '1');
+      setStatus('all up to date', 'ok');
+      if(!opts.silent) toast('Sync is on');
+      const pw = $('#syncPw'); if(pw) pw.value = '';
+    }catch(err){
+      connecting = false; connected = false;
+      setStatus((err && err.message) || 'could not connect', 'err');
+      if(!opts.silent) toast((err && err.message) || 'Could not turn sync on', 4000);
+    }
+  }
+
+  function disconnect(){
+    detach(); connected = false; connecting = false;
+    ls.set(ON, '0');
+    setStatus('Sync is off.');
+    toast('Sync turned off');
+  }
+
+  function saveSettings(cfgText, code, email){
+    let cfg;
+    try{ cfg = JSON.parse(cfgText); }
+    catch(e){
+      const m = cfgText && cfgText.match(/\{[\s\S]*\}/);        /* tolerate a pasted snippet */
+      if(m){ try{ cfg = JSON.parse(m[0]); }catch(e2){
+        try{ cfg = (new Function('return (' + m[0] + ')'))(); }catch(e3){ cfg = null; }
+      } }
+    }
+    if(!cfg || !cfg.projectId || !cfg.apiKey) throw new Error('That Firebase config looks incomplete — it needs apiKey and projectId.');
+    if(!code || !code.trim()) throw new Error('Pick a collection code, the same on every device.');
+    if(!email || !email.trim()) throw new Error('Enter the email you log in with.');
+    ls.set(CFG, JSON.stringify(cfg));
+    ls.set(CODE, code.trim());
+    ls.set(MAIL, email.trim());            /* email only — never the password */
+    return cfg;
+  }
+
+  function syncNow(){
+    if(!connected){ connect(); return; }
+    try{ pushRecords(); pushMeta(); }catch(e){}
+    reconcile().then(() => { attachListeners(); setStatus('all up to date', 'ok'); toast('Synced'); })
+               .catch(() => setStatus('sync problem', 'err'));
+  }
+
+  return {connect, disconnect, syncNow, saveSettings, onLocalChange, setStatus,
+          isOn, getCfg, getCode, getEmail, isConnected: () => connected};
+})();
 
 function toast(msg, ms=2600){
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
@@ -1608,6 +1917,23 @@ $('#btnShelfEdit').onclick = () => {
   });
 })();
 
+/* ── sync panel ─────────────────────────────────────────── */
+function fillSyncForm(){
+  const cfg = Sync.getCfg();
+  if(cfg) $('#syncCfg').value = JSON.stringify(cfg, null, 2);
+  $('#syncCode').value = Sync.getCode();
+  $('#syncEmail').value = Sync.getEmail();
+  if(!Sync.isConnected()) Sync.setStatus(Sync.isOn() ? 'was on — tap Turn sync on to reconnect' : 'Sync is off.');
+}
+
+$('#btnSyncOn').onclick = () => {
+  try{ Sync.saveSettings($('#syncCfg').value, $('#syncCode').value, $('#syncEmail').value); }
+  catch(e){ toast(e.message, 4200); return; }
+  Sync.connect({email: $('#syncEmail').value, password: $('#syncPw').value});
+};
+$('#btnSyncOff').onclick = () => Sync.disconnect();
+$('#btnSyncNow').onclick = () => Sync.syncNow();
+
 $('#btnFill').onclick = backfill;
 $('#btnImport').onclick = () => { importMode='csv'; $('#file').accept='.csv'; $('#file').click(); };
 $('#btnRestore').onclick = () => { importMode='json'; $('#file').accept='.json'; $('#file').click(); };
@@ -1656,6 +1982,10 @@ document.addEventListener('visibilitychange', () => { if(document.hidden) stopCa
 (async () => {
   await load();
   renderAll(); renderQueue();
+  fillSyncForm();
+  /* Firebase keeps the sign-in from last time, so reconnect quietly.
+     If it needs a password the panel says so rather than nagging. */
+  if(Sync.isOn()) Sync.connect({silent:true});
   if(!DB.token){
     document.querySelector('nav button[data-v="setup"]').click();
     toast('Add your Discogs token to get started', 4200);
