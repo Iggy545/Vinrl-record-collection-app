@@ -1,0 +1,25 @@
+# OS cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local-only Claude settings
+.claude/settings.local.json
+
+# Logs and temp files
+*.log
+*.tmp
+tmp/
+sync.log
+
+# Local backups / exports you don't want published
+backups/
+*.bak

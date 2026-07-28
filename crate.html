@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141019">
+<title>Crate — vinyl cataloguer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* ── tokens ───────────────────────────────────────────────── */
+:root{
+  --ink:#141019;        /* deep sleeve black, violet cast */
+  --wax:#1d1826;        /* raised surface */
+  --groove:#2b2436;     /* borders, grooves */
+  --dust:#8a819c;       /* muted text */
+  --card:#ece6da;       /* sleeve cardstock — text colour */
+  --sticker:#ff5f1f;    /* fluorescent price sticker */
+  --sticker-ink:#2a0f00;
+  --ok:#7de0b0;
+  --warn:#ffd24a;
+  --bad:#ff6b6b;
+  --display:"Space Grotesk",system-ui,-apple-system,sans-serif;
+  --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:10px;
+  --shadow:0 14px 40px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--ink);
+  color:var(--card);
+  font-family:var(--display);
+  font-size:16px;line-height:1.45;
+  padding-bottom:calc(72px + env(safe-area-inset-bottom));
+  overscroll-behavior-y:none;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+a{color:var(--sticker)}
+:focus-visible{outline:2px solid var(--sticker);outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{height:6px;width:6px}
+::-webkit-scrollbar-thumb{background:var(--groove);border-radius:3px}
+
+/* ── header ───────────────────────────────────────────────── */
+header{
+  position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;gap:12px;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;
+  background:linear-gradient(var(--ink) 70%,transparent);
+}
+.disc{width:26px;height:26px;border-radius:50%;flex:none;
+  background:
+    radial-gradient(circle at 50% 50%, var(--sticker) 0 14%, var(--ink) 14.5% 20%,
+    var(--groove) 20.5% 22%, var(--wax) 22.5% 32%, var(--groove) 32.5% 34%,
+    var(--wax) 34.5% 46%, var(--groove) 46.5% 48%, var(--wax) 48.5% 100%);
+  animation:spin 3.2s linear infinite;animation-play-state:paused}
+.disc.on{animation-play-state:running}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wordmark{font-weight:700;letter-spacing:.22em;text-transform:uppercase;font-size:15px}
+.wordmark span{color:var(--dust);letter-spacing:.1em;font-weight:400}
+header .spacer{flex:1}
+.ghost{font-family:var(--mono);font-size:11px;color:var(--dust);
+  border:1px solid var(--groove);padding:6px 10px;border-radius:99px}
+.ghost:hover{color:var(--card);border-color:var(--dust)}
+
+main{padding:0 16px}
+.view{display:none}
+.view.on{display:block;animation:rise .28s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ── shared bits ──────────────────────────────────────────── */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dust);margin:26px 0 10px}
+.panel{background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);padding:16px}
+.btn{background:var(--sticker);color:var(--sticker-ink);font-weight:700;
+  padding:14px 18px;border-radius:var(--r);letter-spacing:.02em;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%}
+.btn:active{transform:translateY(1px)}
+.btn.quiet{background:transparent;color:var(--card);border:1px solid var(--groove);font-weight:500}
+.btn.quiet:hover{border-color:var(--dust)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+label.f{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust);margin:14px 0 6px}
+input[type=text],input[type=number],input[type=search],select,textarea{
+  width:100%;background:var(--ink);border:1px solid var(--groove);
+  border-radius:8px;padding:12px;font-family:var(--mono);font-size:14px}
+input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none}
+.hint{font-size:13px;color:var(--dust);line-height:1.5}
+
+/* ── scanner ──────────────────────────────────────────────── */
+#stage{position:relative;background:#000;border:1px solid var(--groove);
+  border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;display:none}
+#stage.on{display:block}
+#video{width:100%;height:100%;object-fit:cover;display:block}
+.reticle{position:absolute;inset:18% 10%;border:2px solid rgba(255,95,31,.9);
+  border-radius:6px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+.reticle::after{content:"";position:absolute;left:0;right:0;height:2px;
+  background:var(--sticker);box-shadow:0 0 12px var(--sticker);
+  animation:sweep 2.2s ease-in-out infinite}
+@keyframes sweep{0%,100%{top:4%}50%{top:96%}}
+.stage-note{position:absolute;left:0;right:0;bottom:0;padding:8px 12px;
+  font-family:var(--mono);font-size:11px;background:rgba(0,0,0,.6);color:var(--card)}
+
+/* ── queue ────────────────────────────────────────────────── */
+.q{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--groove)}
+.q:last-child{border-bottom:0}
+.q .code{font-family:var(--mono);font-size:13px}
+.q .st{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dust)}
+.q.done .st{color:var(--ok)}
+.q.miss .st{color:var(--bad)}
+
+/* ── stats strip ──────────────────────────────────────────── */
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+  background:var(--groove);border:1px solid var(--groove);border-radius:var(--r);overflow:hidden}
+.strip div{background:var(--wax);padding:14px 10px;text-align:center}
+.strip b{display:block;font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:-.02em}
+.strip small{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust)}
+
+/* ── THE CRATE (signature) ────────────────────────────────── */
+.crate-rail{position:relative;margin:0 -16px;padding:0 16px}
+.crate{display:flex;gap:3px;overflow-x:auto;scroll-snap-type:x proximity;
+  padding:22px 16px 26px;margin:0 -16px;
+  background:
+    linear-gradient(180deg,transparent 0 18px,#0d0a11 18px 100%);
+  border-top:1px solid var(--groove);border-bottom:1px solid var(--groove)}
+.spine{flex:none;width:26px;height:184px;scroll-snap-align:center;
+  border-radius:2px 2px 0 0;position:relative;overflow:hidden;
+  box-shadow:inset -3px 0 6px rgba(0,0,0,.5), 0 -3px 8px rgba(0,0,0,.4);
+  transition:transform .18s ease,width .18s ease}
+.spine:hover,.spine:focus-visible{transform:translateY(-14px)}
+.spine .txt{position:absolute;bottom:8px;left:50%;transform:translateX(-50%) rotate(180deg);
+  writing-mode:vertical-rl;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  white-space:nowrap;max-height:168px;overflow:hidden;text-overflow:ellipsis;
+  color:rgba(255,255,255,.92);text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.spine .tab{position:absolute;top:0;left:0;right:0;height:5px;background:rgba(255,255,255,.25)}
+.crate-empty{padding:34px 16px;text-align:center;color:var(--dust);font-size:14px}
+
+/* ── grid ─────────────────────────────────────────────────── */
+.tools{display:flex;gap:8px;margin:14px 0}
+.tools input{flex:2}
+.tools select{flex:1;padding:12px 8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:14px;margin-bottom:24px}
+.rec{position:relative;text-align:left}
+.sleeve{aspect-ratio:1;background:var(--wax);border:1px solid var(--groove);
+  border-radius:4px;overflow:hidden;position:relative}
+.sleeve img{width:100%;height:100%;object-fit:cover;display:block}
+.sleeve .noart{position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10px;color:var(--dust);text-align:center;padding:8px}
+.tagsticker{position:absolute;right:-6px;top:-6px;background:var(--sticker);
+  color:var(--sticker-ink);font-family:var(--mono);font-weight:700;font-size:11px;
+  padding:4px 7px;border-radius:3px;transform:rotate(-7deg);
+  box-shadow:0 3px 8px rgba(0,0,0,.5)}
+.rec h4{margin:8px 0 1px;font-size:13.5px;font-weight:500;line-height:1.25;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.rec p{margin:0;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dupe{position:absolute;left:6px;top:6px;background:var(--warn);color:#2a1f00;
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 5px;border-radius:2px}
+
+/* ── view toggle ──────────────────────────────────────────── */
+.toggle{display:flex;gap:1px;background:var(--groove);border:1px solid var(--groove);
+  border-radius:99px;overflow:hidden;margin:14px 0 0}
+.toggle button{flex:1;padding:9px 4px;background:var(--wax);font-family:var(--mono);
+  font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dust)}
+.toggle button.on{background:var(--sticker);color:var(--sticker-ink);font-weight:700}
+
+.filterbar{background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);
+  padding:12px;margin:10px 0}
+.filterbar .lane{display:flex;gap:8px;align-items:center}
+.filterbar .lane+.lane{margin-top:8px}
+.filterbar .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust);flex:0 0 44px}
+.filterbar input,.filterbar select{padding:9px 8px;font-size:13px}
+.check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dust);
+  font-family:var(--mono);cursor:pointer;margin-top:9px}
+.check input{width:16px;height:16px;flex:0 0 16px;accent-color:var(--sticker)}
+.clearf{font-family:var(--mono);font-size:10.5px;color:var(--sticker);
+  text-transform:uppercase;letter-spacing:.12em;margin-left:auto}
+
+/* ── key badge ────────────────────────────────────────────── */
+.key{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 6px;
+  border-radius:3px;letter-spacing:.02em;white-space:nowrap;
+  background:hsl(var(--kh) 62% 58% / .18);color:hsl(var(--kh) 72% 68%);
+  border:1px solid hsl(var(--kh) 62% 58% / .38)}
+.bpmv{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--card)}
+.bpmv small{font-size:9px;color:var(--dust);font-weight:400;letter-spacing:.1em}
+
+/* ── track list (global) ──────────────────────────────────── */
+.tlist{margin-bottom:24px}
+.trow{display:flex;align-items:center;gap:10px;padding:11px 0;
+  border-bottom:1px solid var(--groove);width:100%;text-align:left}
+.trow .art{width:34px;height:34px;flex:none;border-radius:3px;object-fit:cover;background:var(--ink)}
+.trow .who{min-width:0;flex:1}
+.trow .who b{display:block;font-size:13.5px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .num{display:flex;align-items:center;gap:7px;flex:none}
+.keyhead{display:flex;align-items:baseline;gap:8px;margin:20px 0 2px}
+.keyhead b{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--sticker)}
+.keyhead span{font-family:var(--mono);font-size:10.5px;color:var(--dust)}
+
+/* ── editable tracks in sheet ─────────────────────────────── */
+.ed{border-bottom:1px solid var(--groove);padding:10px 0}
+.ed .top{display:flex;gap:10px;align-items:baseline;font-family:var(--mono);font-size:12.5px}
+.ed .top b{color:var(--sticker);min-width:24px;flex:none}
+.ed .top span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ed .top span:last-child{color:var(--dust);font-size:11px}
+.ed .bot{display:flex;gap:6px;margin-top:7px;align-items:center}
+.ed .bot input[type=number]{flex:0 0 74px;padding:8px;text-align:center}
+.ed .bot select{flex:1;padding:8px}
+.tap{flex:0 0 52px;padding:8px 0;border:1px solid var(--groove);border-radius:8px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dust);text-align:center}
+.tap.live{border-color:var(--sticker);color:var(--sticker)}
+
+/* ── sheet ────────────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(8,5,12,.72);z-index:60;
+  opacity:0;pointer-events:none;transition:opacity .22s}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;max-height:88vh;overflow-y:auto;
+  background:var(--wax);border-top:1px solid var(--groove);
+  border-radius:16px 16px 0 0;box-shadow:var(--shadow);
+  transform:translateY(100%);transition:transform .28s cubic-bezier(.22,1,.36,1);
+  padding:8px 16px calc(28px + env(safe-area-inset-bottom))}
+.sheet.on{transform:none}
+.grip{width:38px;height:4px;border-radius:2px;background:var(--groove);margin:6px auto 14px}
+.sheet-head{display:flex;gap:14px}
+.sheet-head img{width:96px;height:96px;object-fit:cover;border-radius:4px;flex:none;background:var(--ink)}
+.sheet-head h3{margin:0 0 4px;font-size:18px;line-height:1.25}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--dust);line-height:1.7}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  border:1px solid var(--groove);border-radius:99px;padding:4px 10px;color:var(--dust)}
+.tracks{margin:8px 0 0;padding:0;list-style:none;font-family:var(--mono);font-size:12px}
+.tracks li{display:flex;gap:10px;padding:5px 0;border-bottom:1px solid var(--groove)}
+.tracks li b{color:var(--sticker);font-weight:700;min-width:26px}
+.tracks li span:last-child{margin-left:auto;color:var(--dust)}
+
+/* ── stats view ───────────────────────────────────────────── */
+.bar{margin:9px 0}
+.bar .lab{display:flex;font-family:var(--mono);font-size:11.5px;margin-bottom:4px}
+.bar .lab span:last-child{margin-left:auto;color:var(--dust)}
+.bar .track{height:7px;background:var(--groove);border-radius:4px;overflow:hidden}
+.bar .fill{height:100%;background:var(--sticker);border-radius:4px}
+
+/* ── nav ──────────────────────────────────────────────────── */
+nav{position:fixed;left:0;right:0;bottom:0;z-index:50;display:grid;
+  grid-template-columns:repeat(4,1fr);
+  background:rgba(20,16,25,.94);backdrop-filter:blur(14px);
+  border-top:1px solid var(--groove);padding-bottom:env(safe-area-inset-bottom)}
+nav button{padding:12px 4px 14px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--dust);
+  display:flex;flex-direction:column;align-items:center;gap:5px}
+nav button .ic{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
+nav button.on{color:var(--sticker)}
+
+/* ── toast ────────────────────────────────────────────────── */
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));
+  transform:translate(-50%,14px);z-index:80;background:var(--card);color:var(--ink);
+  font-family:var(--mono);font-size:12.5px;padding:10px 16px;border-radius:99px;
+  opacity:0;pointer-events:none;transition:.24s;max-width:90vw;text-align:center}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="disc" id="disc" aria-hidden="true"></div>
+  <div class="wordmark">Crate <span>/ vinyl</span></div>
+  <div class="spacer"></div>
+  <button class="ghost" id="btnHelp">help</button>
+</header>
+
+<main>
+
+<!-- ═══ SCAN ═══ -->
+<section class="view on" id="v-scan">
+  <div class="eyebrow">Add records</div>
+
+  <div id="stage">
+    <video id="video" playsinline muted></video>
+    <div class="reticle"></div>
+    <div class="stage-note" id="stageNote">Point at the barcode on the sleeve</div>
+  </div>
+
+  <div style="margin-top:12px" class="row">
+    <button class="btn" id="btnCam">Scan barcodes</button>
+    <button class="btn quiet" id="btnStop" style="display:none">Stop camera</button>
+  </div>
+
+  <label class="f" for="manual">Or type a barcode, catalogue number or title</label>
+  <div class="row">
+    <input type="text" id="manual" placeholder="5033197130729 / TIDY123 / Binary Finary" autocomplete="off">
+    <button class="btn" id="btnFind" style="flex:0 0 88px">Find</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button class="btn quiet" id="btnPaste">Paste Discogs link</button>
+    <button class="btn quiet" id="btnBlank">Add by hand</button>
+  </div>
+
+  <div class="eyebrow">Queue</div>
+  <div class="panel" id="queue"><div class="hint">Nothing queued. Scans land here and resolve one at a time so Discogs doesn't rate-limit you.</div></div>
+</section>
+
+<!-- ═══ CRATE ═══ -->
+<section class="view" id="v-crate">
+  <div class="eyebrow">Your collection</div>
+  <div class="strip" id="strip"></div>
+
+  <div class="eyebrow">Flick through</div>
+  <div class="crate-rail"><div class="crate" id="crate"></div></div>
+
+  <div class="toggle" id="mode">
+    <button data-m="sleeves" class="on">Sleeves</button>
+    <button data-m="tracks">Tracks</button>
+  </div>
+
+  <div class="tools">
+    <input type="search" id="q" placeholder="Search artist, title, label, cat no…" autocomplete="off">
+    <select id="sort">
+      <option value="added">Newest first</option>
+      <option value="artist">Artist A–Z</option>
+      <option value="year">Year</option>
+      <option value="value">Value high–low</option>
+      <option value="label">Label</option>
+      <option value="bpm">BPM low–high</option>
+      <option value="keybpm">Key, then BPM</option>
+      <option value="bpmkey">BPM, then key</option>
+    </select>
+  </div>
+
+  <div class="filterbar">
+    <div class="lane">
+      <span class="tag">Shelf</span>
+      <select id="shelfFilter"><option value="">All shelves</option></select>
+      <select id="fmtFilter"><option value="">All formats</option></select>
+    </div>
+    <div class="lane">
+      <span class="tag">BPM</span>
+      <input type="number" id="bpmMin" placeholder="min" inputmode="numeric">
+      <input type="number" id="bpmMax" placeholder="max" inputmode="numeric">
+      <select id="keyFilter" style="flex:1.3"><option value="">Any key</option></select>
+    </div>
+    <label class="check"><input type="checkbox" id="harmonic"> Include harmonically compatible keys</label>
+    <div class="lane"><span class="clearf" id="clearF" role="button" tabindex="0">Clear filters</span></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="tlist" id="tlist" style="display:none"></div>
+</section>
+
+<!-- ═══ STATS ═══ -->
+<section class="view" id="v-stats">
+  <div class="eyebrow">What you're sitting on</div>
+  <div class="strip" id="strip2"></div>
+  <div class="panel" style="margin-top:14px">
+    <div class="hint" id="valueNote"></div>
+  </div>
+  <div class="eyebrow">By decade</div>
+  <div id="byDecade"></div>
+  <div class="eyebrow">By label</div>
+  <div id="byLabel"></div>
+  <div class="eyebrow">By style</div>
+  <div id="byStyle"></div>
+  <div class="eyebrow">Most valuable</div>
+  <div id="topValue"></div>
+  <div style="height:20px"></div>
+</section>
+
+<!-- ═══ SETUP ═══ -->
+<section class="view" id="v-setup">
+  <div class="eyebrow">Discogs connection</div>
+  <div class="panel">
+    <p class="hint" style="margin-top:0">Crate reads release data and market prices straight from Discogs. You need your own personal access token — it's free and takes a minute.</p>
+    <ol class="hint" style="padding-left:18px">
+      <li>Sign in at discogs.com</li>
+      <li>Settings → Developers → <b>Generate token</b></li>
+      <li>Paste it below</li>
+    </ol>
+    <label class="f" for="tok">Personal access token</label>
+    <input type="text" id="tok" placeholder="AbCdEfGh…" autocomplete="off" spellcheck="false">
+    <label class="f" for="curr">Prices in</label>
+    <select id="curr">
+      <option>GBP</option><option>USD</option><option>EUR</option>
+      <option>AUD</option><option>CAD</option><option>JPY</option><option>SEK</option>
+    </select>
+    <div style="margin-top:14px" class="row">
+      <button class="btn" id="btnSaveTok">Save token</button>
+      <button class="btn quiet" id="btnTest">Test it</button>
+    </div>
+    <p class="hint" id="tokState" style="margin-bottom:0"></p>
+  </div>
+
+  <div class="eyebrow">Your data</div>
+  <div class="panel">
+    <p class="hint" style="margin-top:0">Everything stays on this device. Export regularly.</p>
+    <div class="row" style="margin-bottom:8px">
+      <button class="btn quiet" id="btnCsv">Export CSV</button>
+      <button class="btn quiet" id="btnJson">Export backup</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button class="btn quiet" id="btnImport">Import Discogs CSV</button>
+      <button class="btn quiet" id="btnRestore">Restore backup</button>
+    </div>
+    <button class="btn quiet" id="btnDj">Export DJ crate sheet</button>
+    <input type="file" id="file" accept=".csv,.json" style="display:none">
+    <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling.</p>
+  </div>
+
+  <div class="eyebrow">Shelves</div>
+  <div class="panel">
+    <div id="shelfList"></div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="newShelf" placeholder="e.g. Hard house 12&quot;s">
+      <button class="btn" id="btnShelf" style="flex:0 0 68px">Add</button>
+    </div>
+  </div>
+
+  <div class="eyebrow">Danger</div>
+  <div class="panel">
+    <button class="btn quiet" id="btnWipe" style="color:var(--bad);border-color:var(--bad)">Delete everything</button>
+  </div>
+  <div style="height:20px"></div>
+</section>
+
+</main>
+
+<nav>
+  <button data-v="scan" class="on"><svg class="ic" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 012-2h3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3M7 12h10"/></svg>Scan</button>
+  <button data-v="crate"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8v8M11 8v8M15 8v8M19 8v8"/></svg>Crate</button>
+  <button data-v="stats"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>Worth</button>
+  <button data-v="setup"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.88-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.11-1.56 1.7 1.7 0 00-1.88.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.88 1.7 1.7 0 00-1.56-1H3a2 2 0 110-4h.09A1.7 1.7 0 004.65 8.6a1.7 1.7 0 00-.34-1.88l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.88.34H9a1.7 1.7 0 001-1.56V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.56 1.7 1.7 0 001.88-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.88V9a1.7 1.7 0 001.56 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.51 1z"/></svg>Setup</button>
+</nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
+<div id="toast" role="status"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   storage — works as a Claude artifact, a local file, or on
+   GitHub Pages. Tries window.storage, then localStorage, then
+   memory (session only).
+   ══════════════════════════════════════════════════════════ */
+const mem = {};
+const store = {
+  async get(k){
+    try{ if(window.storage){ const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } }catch(e){}
+    try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : (k in mem ? mem[k] : null); }catch(e){}
+    return k in mem ? mem[k] : null;
+  },
+  async set(k,v){
+    mem[k]=v;
+    try{ if(window.storage){ await window.storage.set(k, JSON.stringify(v)); return; } }catch(e){}
+    try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){}
+  }
+};
+
+/* ── state ────────────────────────────────────────────────── */
+let DB = { items:[], shelves:['Main'], token:'', curr:'GBP' };
+const SYM = {GBP:'£',USD:'$',EUR:'€',AUD:'A$',CAD:'C$',JPY:'¥',SEK:'kr '};
+const sym = () => SYM[DB.curr] || '';
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function load(){
+  const d = await store.get('crate.db');
+  if(d) DB = Object.assign(DB, d);
+  $('#tok').value = DB.token || '';
+  $('#curr').value = DB.curr || 'GBP';
+}
+let saveTimer;
+function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(()=>store.set('crate.db', DB), 200); }
+
+function toast(msg, ms=2600){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove('on'), ms);
+}
+const spin = on => $('#disc').classList.toggle('on', on);
+
+/* ══════════════════════════════════════════════════════════
+   Discogs — throttled to stay inside 60 requests a minute
+   ══════════════════════════════════════════════════════════ */
+const API = 'https://api.discogs.com';
+let lastCall = 0;
+async function dg(path, params={}){
+  if(!DB.token) throw new Error('NO_TOKEN');
+  const wait = 1100 - (Date.now() - lastCall);
+  if(wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastCall = Date.now();
+  const u = new URL(API + path);
+  Object.entries(params).forEach(([k,v]) => v!=null && v!=='' && u.searchParams.set(k,v));
+  u.searchParams.set('token', DB.token);
+  let res;
+  try{ res = await fetch(u, {headers:{'Accept':'application/json'}}); }
+  catch(e){ throw new Error('NETWORK'); }
+  if(res.status === 401) throw new Error('BAD_TOKEN');
+  if(res.status === 429){ await new Promise(r=>setTimeout(r,4000)); return dg(path, params); }
+  if(res.status === 404) throw new Error('NOT_FOUND');
+  if(!res.ok) throw new Error('HTTP_' + res.status);
+  return res.json();
+}
+
+function friendly(e){
+  const m = {
+    NO_TOKEN:'Add your Discogs token in Setup first.',
+    BAD_TOKEN:'Discogs rejected that token. Check it in Setup.',
+    NETWORK:'Could not reach Discogs. Check your connection.',
+    NOT_FOUND:'Discogs has no record with that ID.'
+  };
+  return m[e.message] || ('Discogs error: ' + e.message);
+}
+
+/* search by barcode, then catno, then free text */
+async function findRelease(codeRaw){
+  const code = codeRaw.trim();
+  const tries = /^\d{8,14}$/.test(code)
+    ? [{barcode:code}, {q:code}]
+    : [{catno:code}, {q:code}];
+  for(const p of tries){
+    const r = await dg('/database/search', Object.assign({type:'release', per_page:12}, p));
+    if(r.results && r.results.length) return r.results;
+  }
+  return [];
+}
+
+async function fetchRelease(id){
+  return dg('/releases/' + id, {curr_abbr: DB.curr});
+}
+
+/* ── Discogs tracklists are messier than they look ──────────
+   Headings are dividers, not tracks. Index entries (continuous
+   mix sides) hide the real tracks in sub_tracks. Compilation
+   tracks carry their own artist that isn't the release artist. */
+const cleanName = n => String(n||'').replace(/\s*\(\d+\)$/,'');
+function mkTrack(t, parentPos){
+  return {
+    pos: t.position || parentPos || '',
+    title: t.title || 'Untitled',
+    artist: (t.artists||[]).map(a => cleanName(a.name)).join(' & '), // blank = same as release
+    dur: t.duration || '',
+    bpm: null, key: ''
+  };
+}
+function flatTracks(list){
+  const out = [];
+  (list||[]).forEach(t => {
+    if(t.type_ === 'heading') return;
+    if(Array.isArray(t.sub_tracks) && t.sub_tracks.length){
+      t.sub_tracks.forEach(s => { if(s.type_ !== 'heading') out.push(mkTrack(s, t.position)); });
+    } else out.push(mkTrack(t, ''));
+  });
+  return out;
+}
+/* keep BPM and key already typed in when a tracklist is re-pulled.
+   Title wins over position: sub-tracks on a continuous mix all share
+   the parent's position, so matching on position alone double-assigns.
+   Each old track is consumed once so nothing gets copied twice. */
+function mergeTracks(fresh, old){
+  const pool = (old||[]).slice();
+  const take = pred => { const j = pool.findIndex(pred); return j<0 ? null : pool.splice(j,1)[0]; };
+  const norm = s => String(s||'').trim().toLowerCase();
+  return fresh.map(t => {
+    const m = take(o => norm(o.title) === norm(t.title))
+           || take(o => o.pos && o.pos === t.pos);
+    return m ? Object.assign(t, {bpm: m.bpm ?? null, key: m.key || ''}) : t;
+  });
+}
+function toItem(rel, scanned){
+  const artist = (rel.artists||[]).map(a => a.name.replace(/\s*\(\d+\)$/,'')).join(' & ') || 'Unknown artist';
+  const lab = (rel.labels||[])[0] || {};
+  return {
+    uid: 'r' + rel.id + '-' + Math.random().toString(36).slice(2,7),
+    id: rel.id,
+    artist,
+    title: rel.title || 'Untitled',
+    year: rel.year || (rel.released||'').slice(0,4) || '',
+    label: lab.name ? lab.name.replace(/\s*\(\d+\)$/,'') : '',
+    catno: lab.catno || '',
+    country: rel.country || '',
+    format: (rel.formats||[]).map(f => [f.name, f.text, (f.descriptions||[]).join(' ')].filter(Boolean).join(' ')).join(', '),
+    genres: (rel.genres||[]).concat(rel.styles||[]),
+    art: (rel.images && rel.images[0] ? (rel.images[0].uri150 || rel.images[0].uri) : (rel.thumb||'')),
+    tracks: flatTracks(rel.tracklist),
+    low: typeof rel.lowest_price === 'number' ? rel.lowest_price : null,
+    forSale: rel.num_for_sale ?? null,
+    have: rel.community?.have ?? null,
+    want: rel.community?.want ?? null,
+    barcode: scanned || '',
+    media: 'VG+', sleeve: 'VG+',
+    paid: null, notes: '', shelf: DB.shelves[0] || 'Main',
+    added: new Date().toISOString(),
+    priced: Date.now()
+  };
+}
+
+/* Goldmine condition multipliers, applied to the Discogs low */
+const COND = {'M':1.35,'NM':1.20,'VG+':1.00,'VG':0.62,'G+':0.35,'G':0.22,'F':0.12,'P':0.06};
+const GRADES = ['M','NM','VG+','VG','G+','G','F','P'];
+function itemValue(it){
+  if(it.low == null) return null;
+  const m = (COND[it.media] ?? 1) * 0.8 + (COND[it.sleeve] ?? 1) * 0.2;
+  return it.low * m;
+}
+const money = n => n==null ? '—' : sym() + n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+/* ══════════════════════════════════════════════════════════
+   Camelot wheel — 1A…12B, plus the musical key each one means
+   ══════════════════════════════════════════════════════════ */
+const KEYNAME = {
+  '1A':'Ab min','1B':'B maj',  '2A':'Eb min','2B':'F# maj', '3A':'Bb min','3B':'Db maj',
+  '4A':'F min', '4B':'Ab maj', '5A':'C min', '5B':'Eb maj', '6A':'G min', '6B':'Bb maj',
+  '7A':'D min', '7B':'F maj',  '8A':'A min', '8B':'C maj',  '9A':'E min', '9B':'G maj',
+  '10A':'B min','10B':'D maj','11A':'F# min','11B':'A maj','12A':'Db min','12B':'E maj'
+};
+const CAMELOT = Object.keys(KEYNAME).sort((a,b)=>
+  (parseInt(a)-parseInt(b)) || a.slice(-1).localeCompare(b.slice(-1)));
+const keyRank = k => { if(!k) return 999; const n=parseInt(k,10); return n*2 + (k.slice(-1)==='B'?1:0); };
+const keyHue  = k => k ? (parseInt(k,10)-1)*30 : 0;
+
+/* the three moves that stay in key, plus the track itself */
+function compatible(k){
+  if(!k) return [];
+  const n = parseInt(k,10), L = k.slice(-1);
+  const up = n===12?1:n+1, dn = n===1?12:n-1;
+  return [k, n+(L==='A'?'B':'A'), up+L, dn+L];
+}
+
+function keyOpts(sel, blank='Any key'){
+  return `<option value="">${blank}</option>` + CAMELOT.map(k =>
+    `<option value="${k}" ${k===sel?'selected':''}>${k} · ${KEYNAME[k]}</option>`).join('');
+}
+const keyBadge = k => k ? `<span class="key" style="--kh:${keyHue(k)}">${k}</span>` : '';
+
+/* every track in the collection, flattened, with its release attached */
+function allTracks(){
+  const out = [];
+  DB.items.forEach(it => (it.tracks||[]).forEach((t,i) => out.push({t, i, it})));
+  return out;
+}
+/* a release's BPM range, for sorting sleeves */
+function relBpm(it){
+  const b = (it.tracks||[]).map(t=>t.bpm).filter(x=>x>0);
+  return b.length ? b.reduce((a,c)=>a+c,0)/b.length : null;
+}
+function relKey(it){
+  const k = (it.tracks||[]).map(t=>t.key).filter(Boolean);
+  return k.length ? k[0] : '';
+}
+
+/* ══════════════════════════════════════════════════════════
+   queue — scans resolve one at a time in the background
+   ══════════════════════════════════════════════════════════ */
+let QUEUE = [], working = false;
+
+function enqueue(code){
+  if(QUEUE.some(q => q.code === code && q.state === 'waiting')) return;
+  QUEUE.unshift({code, state:'waiting', note:''});
+  renderQueue(); pump();
+}
+
+async function pump(){
+  if(working) return;
+  const job = QUEUE.find(q => q.state === 'waiting');
+  if(!job) return;
+  working = true; spin(true);
+  job.state = 'working'; renderQueue();
+  try{
+    const hits = await findRelease(job.code);
+    if(!hits.length){ job.state='miss'; job.note='no match'; }
+    else{
+      const rel = await fetchRelease(hits[0].id);
+      const it = toItem(rel, job.code);
+      const dup = DB.items.find(x => x.id === it.id);
+      DB.items.unshift(it); save();
+      job.state='done';
+      job.note = (dup ? 'dupe · ' : '') + it.artist + ' — ' + it.title;
+      job.uid = it.uid;
+      job.alts = hits.slice(1,6).map(h => ({id:h.id, title:h.title, year:h.year, fmt:(h.format||[]).join(' ')}));
+      renderAll();
+    }
+  }catch(e){
+    job.state='miss'; job.note = friendly(e);
+    if(e.message==='NO_TOKEN' || e.message==='BAD_TOKEN'){ QUEUE.forEach(q=>{ if(q.state==='waiting'){q.state='miss'; q.note='needs token';} }); }
+  }
+  working = false; renderQueue();
+  const more = QUEUE.some(q => q.state === 'waiting');
+  spin(more);
+  if(more) pump();
+}
+
+function renderQueue(){
+  const el = $('#queue');
+  if(!QUEUE.length){ el.innerHTML = '<div class="hint">Nothing queued. Scans land here and resolve one at a time so Discogs doesn\'t rate-limit you.</div>'; return; }
+  el.innerHTML = QUEUE.slice(0,25).map(q => {
+    const cls = q.state==='done'?'done':q.state==='miss'?'miss':'';
+    const st = q.state==='waiting'?'queued':q.state==='working'?'looking…':q.state==='done'?'added':'no match';
+    return `<div class="q ${cls}">
+      <div style="min-width:0">
+        <div class="code">${esc(q.code)}</div>
+        ${q.note?`<div style="font-size:11.5px;color:var(--dust);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:56vw">${esc(q.note)}</div>`:''}
+      </div>
+      <div class="st">${st}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════════════════════════════════════════════════════
+   camera — native BarcodeDetector where available, ZXing on iOS
+   ══════════════════════════════════════════════════════════ */
+let stream=null, detector=null, zx=null, rafId=null, recent=new Map();
+
+function accept(code){
+  const now = Date.now();
+  if(recent.get(code) && now - recent.get(code) < 4000) return;
+  recent.set(code, now);
+  if(navigator.vibrate) navigator.vibrate(35);
+  $('#stageNote').textContent = 'Got ' + code;
+  enqueue(code);
+}
+
+async function startCam(){
+  $('#stage').classList.add('on');
+  $('#btnCam').style.display='none'; $('#btnStop').style.display='';
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}}});
+  }catch(e){
+    $('#stageNote').textContent = 'Camera blocked. Allow camera access, or type the barcode below.';
+    toast('No camera access — type the code instead'); return;
+  }
+  const v = $('#video'); v.srcObject = stream; await v.play();
+
+  if('BarcodeDetector' in window){
+    try{
+      detector = new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39']});
+      $('#stageNote').textContent = 'Point at the barcode on the sleeve';
+      const tick = async () => {
+        if(!stream) return;
+        try{ const b = await detector.detect(v); if(b.length) accept(b[0].rawValue); }catch(e){}
+        rafId = requestAnimationFrame(tick);
+      };
+      tick(); return;
+    }catch(e){ detector = null; }
+  }
+  await zxing();
+}
+
+async function zxing(){
+  $('#stageNote').textContent = 'Loading scanner…';
+  try{
+    if(!window.ZXing){
+      await new Promise((ok,bad)=>{
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+        s.onload = ok; s.onerror = bad; document.head.appendChild(s);
+      });
+    }
+    zx = new ZXing.BrowserMultiFormatReader();
+    $('#stageNote').textContent = 'Point at the barcode on the sleeve';
+    zx.decodeFromStream(stream, $('#video'), (res)=>{ if(res) accept(res.getText()); });
+  }catch(e){
+    $('#stageNote').textContent = 'Scanner needs an internet connection the first time. Type the barcode below instead.';
+  }
+}
+
+function stopCam(){
+  if(rafId) cancelAnimationFrame(rafId); rafId=null;
+  if(zx){ try{ zx.reset(); }catch(e){} zx=null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  $('#video').srcObject=null;
+  $('#stage').classList.remove('on');
+  $('#btnCam').style.display=''; $('#btnStop').style.display='none';
+}
+
+/* ══════════════════════════════════════════════════════════
+   rendering
+   ══════════════════════════════════════════════════════════ */
+function hue(s){ let h=0; for(let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) % 360; return h; }
+
+function renderStrip(){
+  const n = DB.items.length;
+  const vals = DB.items.map(itemValue).filter(v => v!=null);
+  const total = vals.reduce((a,b)=>a+b,0);
+  const priced = vals.length;
+  const html = `
+    <div><b>${n}</b><small>records</small></div>
+    <div><b>${sym()}${Math.round(total).toLocaleString()}</b><small>market low</small></div>
+    <div><b>${priced?money(total/priced).replace(/\.00$/,''):'—'}</b><small>average</small></div>`;
+  $('#strip').innerHTML = html; $('#strip2').innerHTML = html;
+  $('#valueNote').innerHTML = priced
+    ? `Based on the lowest current Discogs asking price for ${priced} of your ${n} records, adjusted for the condition you've graded each copy. It's a floor, not an appraisal — rare pressings with nothing for sale show no price at all.`
+    : `No prices yet. Add your Discogs token in Setup and scan something.`;
+}
+
+function renderCrate(){
+  const el = $('#crate');
+  if(!DB.items.length){ el.innerHTML = '<div class="crate-empty">Empty crate. Go and scan something.</div>'; return; }
+  el.innerHTML = DB.items.slice(0,80).map(it => {
+    const h = hue(it.artist + it.label);
+    return `<button class="spine" data-uid="${it.uid}"
+      style="background:linear-gradient(90deg,hsl(${h} 34% 26%),hsl(${h} 30% 17%))"
+      title="${esc(it.artist)} — ${esc(it.title)}">
+      <span class="tab" style="background:hsl(${h} 60% 55% / .5)"></span>
+      <span class="txt">${esc(it.artist)} · ${esc(it.title)}</span>
+    </button>`;
+  }).join('');
+}
+
+/* current filter settings, read once per render */
+function filters(){
+  const kf = $('#keyFilter').value;
+  return {
+    q: $('#q').value.trim().toLowerCase(),
+    shelf: $('#shelfFilter').value,
+    fmt: $('#fmtFilter').value,
+    lo: parseFloat($('#bpmMin').value) || null,
+    hi: parseFloat($('#bpmMax').value) || null,
+    keys: kf ? ($('#harmonic').checked ? compatible(kf) : [kf]) : null,
+    sort: $('#sort').value
+  };
+}
+const bpmOk = (t,f) => !(f.lo || f.hi) ? true
+  : (t.bpm > 0 && (!f.lo || t.bpm >= f.lo) && (!f.hi || t.bpm <= f.hi));
+const keyOk = (t,f) => !f.keys ? true : f.keys.includes(t.key);
+function relOk(it,f){
+  if(f.shelf && it.shelf !== f.shelf) return false;
+  if(f.fmt && !(it.format||'').toLowerCase().includes(f.fmt.toLowerCase())) return false;
+  if(f.q && ![it.artist,it.title,it.label,it.catno,it.barcode,(it.genres||[]).join(' ')]
+       .join(' ').toLowerCase().includes(f.q)) return false;
+  return true;
+}
+
+/* sleeve view — a release survives if any of its tracks passes BPM/key */
+function visible(){
+  const f = filters();
+  const list = DB.items.filter(it => {
+    if(!relOk(it,f)) return false;
+    if(!f.keys && !f.lo && !f.hi) return true;
+    return (it.tracks||[]).some(t => bpmOk(t,f) && keyOk(t,f));
+  });
+  const cmp = {
+    added:(a,b)=> (b.added||'').localeCompare(a.added||''),
+    artist:(a,b)=> a.artist.localeCompare(b.artist) || (a.year+'').localeCompare(b.year+''),
+    year:(a,b)=> (b.year||0) - (a.year||0),
+    value:(a,b)=> (itemValue(b)??-1) - (itemValue(a)??-1),
+    label:(a,b)=> (a.label||'~').localeCompare(b.label||'~'),
+    bpm:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9),
+    keybpm:(a,b)=> keyRank(relKey(a)) - keyRank(relKey(b)) || (relBpm(a)??1e9) - (relBpm(b)??1e9),
+    bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b))
+  }[f.sort];
+  return list.sort(cmp);
+}
+
+/* track view — the flat list a DJ actually reads */
+function visibleTracks(){
+  const f = filters();
+  let rows = allTracks().filter(({t,it}) => {
+    if(!relOk(it,f)){
+      if(!f.q) return false;
+      if(!`${t.title} ${t.artist}`.toLowerCase().includes(f.q)) return false;
+    }
+    return bpmOk(t,f) && keyOk(t,f);
+  });
+  const cmp = {
+    added:(a,b)=> (b.it.added||'').localeCompare(a.it.added||''),
+    artist:(a,b)=> a.it.artist.localeCompare(b.it.artist) || a.i - b.i,
+    year:(a,b)=> (b.it.year||0) - (a.it.year||0),
+    value:(a,b)=> (itemValue(b.it)??-1) - (itemValue(a.it)??-1),
+    label:(a,b)=> (a.it.label||'~').localeCompare(b.it.label||'~'),
+    bpm:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9),
+    keybpm:(a,b)=> keyRank(a.t.key) - keyRank(b.t.key) || (a.t.bpm||1e9) - (b.t.bpm||1e9),
+    bpmkey:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9) || keyRank(a.t.key) - keyRank(b.t.key)
+  }[f.sort];
+  return {rows: rows.sort(cmp), sort: f.sort};
+}
+
+function renderTracks(){
+  const {rows, sort} = visibleTracks();
+  const el = $('#tlist');
+  if(!rows.length){
+    el.innerHTML = `<div class="hint" style="padding:26px 0;text-align:center">${
+      allTracks().length ? 'No tracks match those filters.'
+      : 'No tracklists yet. Open a record and add tracks, or scan one so Discogs fills them in.'}</div>`;
+    return;
+  }
+  let html = '', lastKey = null;
+  const grouped = sort === 'keybpm';
+  rows.forEach(({t,i,it}) => {
+    if(grouped && t.key !== lastKey){
+      lastKey = t.key;
+      html += `<div class="keyhead"><b>${t.key || 'NO KEY'}</b><span>${t.key?KEYNAME[t.key]:'not set yet'}</span></div>`;
+    }
+    html += `<button class="trow" data-uid="${it.uid}">
+      ${it.art?`<img class="art" src="${esc(it.art)}" alt="" loading="lazy">`:'<span class="art"></span>'}
+      <span class="who">
+        <b>${esc(t.title || 'Untitled')}</b>
+        <span>${esc(t.artist || it.artist)} · ${esc(it.title)}${t.pos?' · '+esc(t.pos):''}</span>
+      </span>
+      <span class="num">
+        <span class="bpmv">${t.bpm ? t.bpm : '<small>—</small>'}</span>
+        ${keyBadge(t.key)}
+      </span>
+    </button>`;
+  });
+  el.innerHTML = html;
+}
+
+function renderGrid(){
+  const list = visible();
+  const counts = {}; DB.items.forEach(i => counts[i.id] = (counts[i.id]||0)+1);
+  const el = $('#grid');
+  if(!list.length){
+    el.innerHTML = `<div class="hint" style="grid-column:1/-1;padding:26px 0;text-align:center">${DB.items.length?'Nothing matches that.':'Your crate is empty. Scan a sleeve to start.'}</div>`;
+    return;
+  }
+  el.innerHTML = list.map(it => {
+    const v = itemValue(it);
+    return `<button class="rec" data-uid="${it.uid}">
+      <div class="sleeve">
+        ${it.art ? `<img loading="lazy" src="${esc(it.art)}" alt="">`
+                 : `<div class="noart">${esc(it.catno || 'no image')}</div>`}
+        ${counts[it.id] > 1 ? '<span class="dupe">DUPE</span>' : ''}
+        ${v!=null ? `<span class="tagsticker">${sym()}${v<10?v.toFixed(2):Math.round(v)}</span>` : ''}
+      </div>
+      <h4>${esc(it.title)}</h4>
+      <p>${esc(it.artist)}</p>
+      <p>${esc([it.label, it.year].filter(Boolean).join(' · '))}</p>
+    </button>`;
+  }).join('');
+}
+
+function renderFilters(){
+  const sh = $('#shelfFilter'), keepS = sh.value;
+  sh.innerHTML = '<option value="">All shelves</option>' + DB.shelves.map(s=>`<option>${esc(s)}</option>`).join('');
+  sh.value = keepS;
+  const fmts = [...new Set(DB.items.map(i => (i.format||'').split(',')[0].trim().split(' ')[0]).filter(Boolean))].sort();
+  const ff = $('#fmtFilter'), keepF = ff.value;
+  ff.innerHTML = '<option value="">All formats</option>' + fmts.map(f=>`<option>${esc(f)}</option>`).join('');
+  ff.value = keepF;
+  const kf = $('#keyFilter'), keepK = kf.value, tally = {};
+  allTracks().forEach(({t}) => { if(t.key) tally[t.key] = (tally[t.key]||0)+1; });
+  kf.innerHTML = '<option value="">Any key</option>' + CAMELOT.map(k =>
+    `<option value="${k}">${k} · ${KEYNAME[k]}${tally[k]?' ('+tally[k]+')':''}</option>`).join('');
+  kf.value = keepK;
+  $('#shelfList').innerHTML = DB.shelves.map((s,i)=>
+    `<div class="q"><div class="code">${esc(s)}</div>
+     <div class="st">${DB.items.filter(x=>x.shelf===s).length} records</div>
+     ${DB.shelves.length>1?`<button class="ghost" data-shelf="${i}" style="margin-left:10px">remove</button>`:''}</div>`).join('');
+}
+
+function bars(map, host, fmt = v=>v){
+  const rows = Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const max = rows.length ? rows[0][1] : 1;
+  $(host).innerHTML = rows.length ? rows.map(([k,v]) =>
+    `<div class="bar"><div class="lab"><span>${esc(k)}</span><span>${fmt(v)}</span></div>
+     <div class="track"><div class="fill" style="width:${Math.max(3,v/max*100)}%"></div></div></div>`).join('')
+    : '<div class="hint">Not enough data yet.</div>';
+}
+
+function renderStats(){
+  const dec={}, lab={}, sty={};
+  DB.items.forEach(i=>{
+    if(i.year) dec[(Math.floor(i.year/10)*10)+'s'] = (dec[(Math.floor(i.year/10)*10)+'s']||0)+1;
+    if(i.label) lab[i.label] = (lab[i.label]||0)+1;
+    (i.genres||[]).forEach(g => sty[g] = (sty[g]||0)+1);
+  });
+  bars(dec,'#byDecade'); bars(lab,'#byLabel'); bars(sty,'#byStyle');
+  const top = DB.items.filter(i=>itemValue(i)!=null).sort((a,b)=>itemValue(b)-itemValue(a)).slice(0,8);
+  $('#topValue').innerHTML = top.length ? top.map(i=>
+    `<div class="q"><div style="min-width:0">
+      <div class="code" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58vw">${esc(i.title)}</div>
+      <div style="font-size:11.5px;color:var(--dust)">${esc(i.artist)}</div></div>
+     <div class="st" style="color:var(--sticker)">${money(itemValue(i))}</div></div>`).join('')
+    : '<div class="hint">Nothing priced yet.</div>';
+}
+
+let MODE = 'sleeves';
+function renderList(){
+  $('#grid').style.display  = MODE==='sleeves' ? '' : 'none';
+  $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
+  if(MODE==='sleeves') renderGrid(); else renderTracks();
+}
+function renderAll(){ renderStrip(); renderCrate(); renderFilters(); renderList(); renderStats(); }
+
+/* ── detail sheet ─────────────────────────────────────────── */
+let openUid = null;
+function openSheet(uid){
+  const it = DB.items.find(x => x.uid === uid); if(!it) return;
+  openUid = uid;
+  const v = itemValue(it);
+  $('#sheetBody').innerHTML = `
+    <div class="sheet-head">
+      ${it.art?`<img src="${esc(it.art)}" alt="">`:`<div style="width:96px;height:96px;border-radius:4px;background:var(--ink);display:grid;place-items:center;font-family:var(--mono);font-size:10px;color:var(--dust)">no art</div>`}
+      <div style="min-width:0">
+        <h3>${esc(it.title)}</h3>
+        <div class="meta">${esc(it.artist)}<br>
+          ${esc([it.label, it.catno].filter(Boolean).join(' · '))}<br>
+          ${esc([it.year, it.country, it.format].filter(Boolean).join(' · '))}</div>
+      </div>
+    </div>
+
+    <div class="strip" style="margin-top:14px">
+      <div><b style="color:var(--sticker)">${money(v)}</b><small>your copy</small></div>
+      <div><b>${it.low!=null?money(it.low):'—'}</b><small>lowest listed</small></div>
+      <div><b>${it.forSale ?? '—'}</b><small>for sale</small></div>
+    </div>
+
+    <div class="chips">
+      ${(it.genres||[]).slice(0,8).map(g=>`<span class="chip">${esc(g)}</span>`).join('')}
+      ${it.have!=null?`<span class="chip">${it.have} have · ${it.want} want</span>`:''}
+    </div>
+
+    <div class="row">
+      <div><label class="f" for="sMedia">Media</label>
+        <select id="sMedia">${GRADES.map(g=>`<option ${g===it.media?'selected':''}>${g}</option>`).join('')}</select></div>
+      <div><label class="f" for="sSleeve">Sleeve</label>
+        <select id="sSleeve">${GRADES.map(g=>`<option ${g===it.sleeve?'selected':''}>${g}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div><label class="f" for="sShelf">Shelf</label>
+        <select id="sShelf">${DB.shelves.map(s=>`<option ${s===it.shelf?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
+      <div><label class="f" for="sPaid">You paid</label>
+        <input type="number" id="sPaid" step="0.01" placeholder="0.00" value="${it.paid??''}"></div>
+    </div>
+    ${it.paid!=null && v!=null ? `<p class="hint" style="color:${v>=it.paid?'var(--ok)':'var(--bad)'}">
+       ${v>=it.paid?'Up':'Down'} ${money(Math.abs(v-it.paid))} on what you paid.</p>`:''}
+
+    <label class="f" for="sNotes">Notes</label>
+    <textarea id="sNotes" rows="2" placeholder="Runout etching, sleeve creasing, who you bought it from…">${esc(it.notes)}</textarea>
+
+    <div class="eyebrow">Tracklist · BPM &amp; key</div>
+    ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>`
+      <div class="ed">
+        <div class="top">
+          <b>${esc(t.pos || (i+1))}</b>
+          <span>${t.artist ? esc(t.artist)+' — ' : ''}${esc(t.title || 'Untitled')}</span>
+          <span>${esc(t.dur||'')}</span>
+        </div>
+        <div class="bot">
+          <input type="number" class="tBpm" data-i="${i}" value="${t.bpm||''}"
+                 placeholder="BPM" min="40" max="300" step="0.1" inputmode="decimal">
+          <button class="tap" data-i="${i}">Tap</button>
+          <select class="tKey" data-i="${i}">${keyOpts(t.key||'', '— key —')}</select>
+        </div>
+      </div>`).join('')
+      : '<p class="hint">No tracklist on this one. Add the tracks you care about.</p>'}
+    <button class="btn quiet" id="sAddTrack" style="margin-top:10px">Add a track</button>
+
+    <div class="row" style="margin-top:18px">
+      <button class="btn quiet" id="sRefresh">Refresh from Discogs</button>
+      <a class="btn quiet" href="https://www.discogs.com/release/${it.id}" target="_blank" rel="noopener" style="text-decoration:none">Open on Discogs</a>
+    </div>
+    <button class="btn quiet" id="sDelete" style="margin-top:8px;color:var(--bad);border-color:var(--bad)">Remove from crate</button>
+  `;
+  const patch = (k, val) => { const o = DB.items.find(x=>x.uid===uid); o[k]=val; save(); renderAll(); };
+  $('#sMedia').onchange = e => { patch('media', e.target.value); openSheet(uid); };
+  $('#sSleeve').onchange = e => { patch('sleeve', e.target.value); openSheet(uid); };
+  $('#sShelf').onchange = e => patch('shelf', e.target.value);
+  $('#sPaid').onchange = e => { patch('paid', e.target.value===''?null:parseFloat(e.target.value)); openSheet(uid); };
+  $('#sNotes').oninput = e => patch('notes', e.target.value);
+  /* per-track BPM and key */
+  const tracksOf = () => DB.items.find(x=>x.uid===uid).tracks;
+  document.querySelectorAll('#sheetBody .tBpm').forEach(inp => {
+    inp.onchange = e => {
+      const v = parseFloat(e.target.value);
+      tracksOf()[+e.target.dataset.i].bpm = (v>0 ? Math.round(v*10)/10 : null);
+      save(); renderAll();
+    };
+  });
+  document.querySelectorAll('#sheetBody .tKey').forEach(sel => {
+    sel.onchange = e => {
+      tracksOf()[+e.target.dataset.i].key = e.target.value || '';
+      save(); renderAll();
+    };
+  });
+
+  /* tap tempo — tap along with the record, four taps is enough */
+  document.querySelectorAll('#sheetBody .tap').forEach(btn => {
+    let taps = [];
+    btn.onclick = () => {
+      const now = performance.now();
+      if(taps.length && now - taps[taps.length-1] > 2200) taps = [];
+      taps.push(now); taps = taps.slice(-8);
+      btn.classList.add('live');
+      if(taps.length < 2){ btn.textContent = 'again'; return; }
+      const gaps = taps.slice(1).map((t,j) => t - taps[j]);
+      const bpm = Math.round(60000 / (gaps.reduce((a,c)=>a+c,0)/gaps.length) * 10)/10;
+      btn.textContent = bpm;
+      const inp = document.querySelector(`#sheetBody .tBpm[data-i="${btn.dataset.i}"]`);
+      inp.value = bpm;
+      tracksOf()[+btn.dataset.i].bpm = bpm; save();
+      clearTimeout(btn._t);
+      btn._t = setTimeout(() => { btn.textContent='Tap'; btn.classList.remove('live'); taps=[]; renderAll(); }, 2600);
+    };
+  });
+
+  $('#sAddTrack').onclick = () => {
+    const title = prompt('Track title'); if(title===null) return;
+    const o = DB.items.find(x=>x.uid===uid);
+    o.tracks = o.tracks || [];
+    o.tracks.push({pos:String.fromCharCode(65+Math.floor(o.tracks.length/2))+(o.tracks.length%2+1),
+                   title:title||'Untitled', dur:'', bpm:null, key:''});
+    save(); renderAll(); openSheet(uid);
+  };
+
+  $('#sDelete').onclick = () => {
+    if(!confirm('Remove "'+it.title+'" from your crate?')) return;
+    DB.items = DB.items.filter(x=>x.uid!==uid); save(); closeSheet(); renderAll(); toast('Removed');
+  };
+  $('#sRefresh').onclick = async () => {
+    if(!it.id){ toast('This one was added by hand, so there is nothing on Discogs to refresh'); return; }
+    spin(true); toast('Checking Discogs…');
+    try{
+      const rel = await fetchRelease(it.id);
+      const o = DB.items.find(x=>x.uid===uid);
+      o.low = typeof rel.lowest_price==='number'?rel.lowest_price:null;
+      o.forSale = rel.num_for_sale ?? null; o.priced = Date.now();
+      const fresh = flatTracks(rel.tracklist);
+      let note = 'Price updated';
+      if(fresh.length){
+        const before = (o.tracks||[]).length;
+        o.tracks = mergeTracks(fresh, o.tracks);
+        const kept = o.tracks.filter(t => t.bpm || t.key).length;
+        note = `Updated · ${fresh.length} track${fresh.length===1?'':'s'}`
+             + (fresh.length !== before ? ` (was ${before})` : '')
+             + (kept ? ` · kept ${kept} BPM/key` : '');
+      }
+      if(!o.art && rel.images?.[0]) o.art = rel.images[0].uri150 || rel.images[0].uri;
+      save(); renderAll(); openSheet(uid); toast(note, 3600);
+    }catch(e){ toast(friendly(e)); }
+    spin(false);
+  };
+  $('#scrim').classList.add('on'); $('#sheet').classList.add('on');
+}
+function closeSheet(){ openUid=null; $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on'); }
+
+/* ══════════════════════════════════════════════════════════
+   CSV — matches the Discogs export layout both ways
+   ══════════════════════════════════════════════════════════ */
+const COLS = ['Catalog#','Artist','Title','Label','Format','Rating','Released','release_id',
+              'CollectionFolder','Date Added','Collection Media Condition',
+              'Collection Sleeve Condition','Collection Notes'];
+const cell = s => { s = String(s??''); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+const GM = {'M':'Mint (M)','NM':'Near Mint (NM or M-)','VG+':'Very Good Plus (VG+)','VG':'Very Good (VG)',
+            'G+':'Good Plus (G+)','G':'Good (G)','F':'Fair (F)','P':'Poor (P)'};
+const unGM = s => { const k = Object.keys(GM).find(k => GM[k] === s); return k || (GRADES.includes(s)?s:'VG+'); };
+
+function exportCsv(){
+  const rows = [COLS.join(',')].concat(DB.items.map(i => [
+    i.catno, i.artist, i.title, i.label, i.format, '', i.year, i.id, i.shelf,
+    (i.added||'').slice(0,19).replace('T',' '), GM[i.media]||'', GM[i.sleeve]||'',
+    [i.notes, i.paid!=null?('Paid '+sym()+i.paid):''].filter(Boolean).join(' — ')
+  ].map(cell).join(',')));
+  download('crate-collection.csv', rows.join('\n'), 'text/csv');
+}
+
+function parseCsv(text){
+  const rows=[]; let row=[], f='', q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){f+='"';i++;} else q=false; } else f+=c; }
+    else if(c==='"') q=true;
+    else if(c===','){ row.push(f); f=''; }
+    else if(c==='\n'){ row.push(f); rows.push(row); row=[]; f=''; }
+    else if(c!=='\r') f+=c;
+  }
+  if(f||row.length){ row.push(f); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim()!==''));
+}
+
+function importCsv(text){
+  const rows = parseCsv(text);
+  if(rows.length < 2){ toast('That CSV looks empty'); return; }
+  const head = rows[0].map(h => h.trim());
+  const ix = n => head.findIndex(h => h.toLowerCase() === n.toLowerCase());
+  const g = (r, n) => { const j = ix(n); return j>=0 ? (r[j]||'').trim() : ''; };
+  let added = 0;
+  rows.slice(1).forEach(r => {
+    const id = parseInt(g(r,'release_id'),10);
+    const artist = g(r,'Artist'), title = g(r,'Title');
+    if(!artist && !title) return;
+    const shelf = g(r,'CollectionFolder') || DB.shelves[0] || 'Main';
+    if(shelf && !DB.shelves.includes(shelf)) DB.shelves.push(shelf);
+    DB.items.push({
+      uid:'i'+Date.now()+Math.random().toString(36).slice(2,7),
+      id: id || 0, artist: artist||'Unknown artist', title: title||'Untitled',
+      year: parseInt(g(r,'Released'),10) || '', label: g(r,'Label'),
+      catno: g(r,'Catalog#'), country:'', format: g(r,'Format'), genres:[],
+      art:'', tracks:[], low:null, forSale:null, have:null, want:null, barcode:'',
+      media: unGM(g(r,'Collection Media Condition')),
+      sleeve: unGM(g(r,'Collection Sleeve Condition')),
+      paid:null, notes: g(r,'Collection Notes'), shelf,
+      added: g(r,'Date Added') || new Date().toISOString(), priced:0
+    });
+    added++;
+  });
+  save(); renderAll();
+  toast(added + ' records imported. Use “Refresh price” or rescan to pull artwork.');
+}
+
+function download(name, data, type){
+  const b = new Blob([data], {type});
+  const u = URL.createObjectURL(b);
+  const a = document.createElement('a'); a.href=u; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(u), 4000);
+}
+
+/* ══════════════════════════════════════════════════════════
+   wiring
+   ══════════════════════════════════════════════════════════ */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on', x===b));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on', v.id === 'v'+'-'+b.dataset.v));
+  if(b.dataset.v !== 'scan') stopCam();
+  window.scrollTo(0,0);
+});
+
+$('#btnCam').onclick = startCam;
+$('#btnStop').onclick = stopCam;
+$('#btnFind').onclick = () => {
+  const v = $('#manual').value.trim();
+  if(!v) return toast('Type a barcode, cat number or title first');
+  enqueue(v); $('#manual').value='';
+};
+$('#manual').addEventListener('keydown', e => { if(e.key==='Enter') $('#btnFind').click(); });
+
+$('#btnPaste').onclick = async () => {
+  const url = prompt('Paste a Discogs release URL or ID');
+  if(!url) return;
+  const m = url.match(/(?:release\/)?(\d{3,})/);
+  if(!m) return toast('No release ID in that');
+  spin(true);
+  try{
+    const rel = await fetchRelease(m[1]);
+    DB.items.unshift(toItem(rel, '')); save(); renderAll();
+    toast('Added ' + rel.title);
+  }catch(e){ toast(friendly(e)); }
+  spin(false);
+};
+
+$('#btnBlank').onclick = () => {
+  const artist = prompt('Artist'); if(artist===null) return;
+  const title = prompt('Title'); if(title===null) return;
+  DB.items.unshift({
+    uid:'m'+Date.now(), id:0, artist:artist||'Unknown artist', title:title||'Untitled',
+    year:'', label:'', catno:'', country:'', format:'Vinyl', genres:[], art:'', tracks:[],
+    low:null, forSale:null, have:null, want:null, barcode:'', media:'VG+', sleeve:'VG+',
+    paid:null, notes:'Added by hand', shelf:DB.shelves[0]||'Main',
+    added:new Date().toISOString(), priced:0
+  });
+  save(); renderAll(); toast('Added');
+};
+
+['#q','#sort','#shelfFilter','#fmtFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic'].forEach(s => {
+  $(s).addEventListener('input', renderList);
+  $(s).addEventListener('change', renderList);
+});
+
+document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
+  MODE = b.dataset.m;
+  document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x===b));
+  renderList();
+});
+
+$('#clearF').onclick = () => {
+  ['#q','#bpmMin','#bpmMax'].forEach(s => $(s).value = '');
+  ['#shelfFilter','#fmtFilter','#keyFilter'].forEach(s => $(s).value = '');
+  $('#harmonic').checked = false;
+  renderList();
+};
+
+document.addEventListener('click', e => {
+  const rec = e.target.closest('.rec, .spine');
+  if(rec){ openSheet(rec.dataset.uid); return; }
+  const sh = e.target.closest('[data-shelf]');
+  if(sh){
+    const i = +sh.dataset.shelf, name = DB.shelves[i];
+    if(!confirm('Remove shelf "'+name+'"? Records move to '+(DB.shelves.find(s=>s!==name))+'.')) return;
+    DB.shelves.splice(i,1);
+    DB.items.forEach(x => { if(x.shelf===name) x.shelf = DB.shelves[0]; });
+    save(); renderAll();
+  }
+});
+$('#scrim').onclick = closeSheet;
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeSheet(); });
+
+$('#btnSaveTok').onclick = () => { DB.token = $('#tok').value.trim(); DB.curr = $('#curr').value; save(); toast('Saved'); };
+$('#curr').onchange = () => { DB.curr = $('#curr').value; save(); renderAll(); };
+$('#btnTest').onclick = async () => {
+  DB.token = $('#tok').value.trim(); DB.curr = $('#curr').value; save();
+  $('#tokState').textContent = 'Checking…'; spin(true);
+  try{
+    const r = await dg('/database/search', {q:'aphex twin', type:'release', per_page:1});
+    $('#tokState').innerHTML = r.results?.length
+      ? '<span style="color:var(--ok)">Connected. Discogs is answering.</span>'
+      : '<span style="color:var(--warn)">Connected, but the search came back empty.</span>';
+  }catch(e){ $('#tokState').innerHTML = '<span style="color:var(--bad)">'+esc(friendly(e))+'</span>'; }
+  spin(false);
+};
+
+$('#btnShelf').onclick = () => {
+  const v = $('#newShelf').value.trim();
+  if(!v) return; if(DB.shelves.includes(v)) return toast('You already have that shelf');
+  DB.shelves.push(v); $('#newShelf').value=''; save(); renderAll(); toast('Shelf added');
+};
+
+$('#btnCsv').onclick = () => DB.items.length ? exportCsv() : toast('Nothing to export yet');
+$('#btnJson').onclick = () => download('crate-backup.json', JSON.stringify(DB,null,2), 'application/json');
+$('#btnDj').onclick = () => {
+  const rows = allTracks();
+  if(!rows.length) return toast('No tracklists to export yet');
+  const head = ['Pos','Track','Artist','Release','BPM','Camelot','Key','Label','Catalog#','Year','Shelf'];
+  const body = rows
+    .sort((a,b)=> keyRank(a.t.key)-keyRank(b.t.key) || (a.t.bpm||1e9)-(b.t.bpm||1e9))
+    .map(({t,it}) => [t.pos, t.title, t.artist || it.artist, it.title, t.bpm??'', t.key||'',
+                      t.key?KEYNAME[t.key]:'', it.label, it.catno, it.year, it.shelf]
+                     .map(cell).join(','));
+  download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
+};
+let importMode = 'csv';
+$('#btnImport').onclick = () => { importMode='csv'; $('#file').accept='.csv'; $('#file').click(); };
+$('#btnRestore').onclick = () => { importMode='json'; $('#file').accept='.json'; $('#file').click(); };
+$('#file').onchange = e => {
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try{
+      if(importMode === 'json'){
+        const d = JSON.parse(r.result);
+        if(!d.items) throw 0;
+        if(!confirm('Replace your current crate with this backup?')) return;
+        DB = Object.assign({shelves:['Main'],token:'',curr:'GBP'}, d);
+        save(); load(); renderAll(); toast('Backup restored');
+      } else importCsv(r.result);
+    }catch(err){ toast('Could not read that file'); }
+  };
+  r.readAsText(f); e.target.value='';
+};
+
+$('#btnWipe').onclick = () => {
+  if(!confirm('Delete every record, shelf and setting? This cannot be undone.')) return;
+  if(!confirm('Really sure? Export a backup first if you want one.')) return;
+  DB = {items:[], shelves:['Main'], token:'', curr:'GBP'};
+  save(); $('#tok').value=''; renderAll(); toast('Wiped');
+};
+
+$('#btnHelp').onclick = () => {
+  $('#sheetBody').innerHTML = `
+    <h3 style="margin:0 0 10px">How Crate works</h3>
+    <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
+    <p class="hint"><b>Scans queue up.</b> Keep the camera running down a whole shelf. Crate resolves them one a second in the background so Discogs never throttles you.</p>
+    <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
+    <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
+    <p class="hint"><b>BPM and key are yours to enter.</b> No database covers 90s 12"s properly, so open a record and type them in per track — or hit Tap along with the record and Crate works the tempo out. Keys use the Camelot wheel, with the musical key shown next to each one.</p>
+    <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix.</p>
+    <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
+    <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;
+  $('#scrim').classList.add('on'); $('#sheet').classList.add('on');
+};
+
+window.addEventListener('online', () => { if(QUEUE.some(q=>q.state==='waiting')) pump(); });
+document.addEventListener('visibilitychange', () => { if(document.hidden) stopCam(); });
+
+/* go */
+(async () => {
+  await load();
+  renderAll(); renderQueue();
+  if(!DB.token){
+    document.querySelector('nav button[data-v="setup"]').click();
+    toast('Add your Discogs token to get started', 4200);
+  }
+})();
+</script>
+</body>
+</html>
