@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.11.0 - 2026-07-28 18:11
+
+Back up settings as well as records, and stop restore overwriting itself
+
+- Modified `index.html` (+63/-6)
+
 ## 0.10.1 - 2026-07-28 18:00
 
 Push branch and tags separately so GitHub Pages actually rebuilds

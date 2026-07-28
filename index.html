@@ -487,6 +487,7 @@ nav button.on{color:var(--sticker)}
     <button class="btn quiet" id="btnFill" style="margin-bottom:8px">Fill in from Discogs</button>
     <button class="btn quiet" id="btnDj">Export DJ crate sheet</button>
     <input type="file" id="file" accept=".csv,.json" style="display:none">
+    <p class="hint"><b>Export backup</b> saves everything — every record with its tracklists, BPMs, keys, grades and shelf order, plus your Discogs token and sync settings. That's the one to keep. Because it holds your token and Firebase details, treat the file like a password.</p>
     <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling. It carries no artwork or tracklists though — Discogs doesn't put them in the export — so after importing, tap <b>Fill in from Discogs</b> to pull those in.</p>
   </div>
 
@@ -557,7 +558,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.11.0';
 
 const mem = {};
 const store = {
@@ -866,8 +867,25 @@ var Sync = (function(){
                .catch(() => setStatus('sync problem', 'err'));
   }
 
+  /* for the backup file: the settings worth carrying to another device.
+     Deliberately not the client id or the per-record sync timestamps —
+     those describe THIS device's conversation with the server, and
+     restoring them elsewhere would make it skip real updates. */
+  function exportSettings(){
+    return {cfg: getCfg(), code: getCode(), email: getEmail(), on: isOn()};
+  }
+  function importSettings(s){
+    if(!s || typeof s !== 'object') return false;
+    if(s.cfg)   ls.set(CFG, JSON.stringify(s.cfg));
+    if(s.code)  ls.set(CODE, String(s.code));
+    if(s.email) ls.set(MAIL, String(s.email));
+    ls.set(ON, s.on ? '1' : '0');
+    return true;
+  }
+
   return {connect, disconnect, syncNow, saveSettings, onLocalChange, setStatus,
-          isOn, getCfg, getCode, getEmail, isConnected: () => connected};
+          isOn, getCfg, getCode, getEmail, exportSettings, importSettings,
+          isConnected: () => connected};
 })();
 
 function toast(msg, ms=2600){
@@ -2106,7 +2124,23 @@ $('#btnShelf').onclick = () => {
 };
 
 $('#btnCsv').onclick = () => DB.items.length ? exportCsv() : toast('Nothing to export yet');
-$('#btnJson').onclick = () => download('crate-backup.json', JSON.stringify(DB,null,2), 'application/json');
+/* A backup is the whole app state, not just the records: the database
+   plus the settings that live in their own storage keys. Wrapped in an
+   envelope so a restore can tell what it's looking at and tell you what
+   it's about to replace. Older backups were the bare database object,
+   and the restore still accepts those. */
+$('#btnJson').onclick = () => {
+  const backup = {
+    crate: 'backup',
+    version: APP_VERSION,
+    exported: new Date().toISOString(),
+    records: DB.items.length,
+    db: DB,
+    sync: Sync.exportSettings()
+  };
+  download('crate-backup.json', JSON.stringify(backup, null, 2), 'application/json');
+  toast(`Backed up ${DB.items.length} records and your settings`, 3600);
+};
 $('#btnDj').onclick = () => {
   const rows = allTracks();
   if(!rows.length) return toast('No tracklists to export yet');
@@ -2418,10 +2452,33 @@ $('#file').onchange = e => {
     try{
       if(importMode === 'json'){
         const d = JSON.parse(r.result);
-        if(!d.items) throw 0;
-        if(!confirm('Replace your current crate with this backup?')) return;
-        DB = Object.assign({shelves:['Main'],token:'',curr:'GBP'}, d);
-        save(); load(); renderAll(); toast('Backup restored');
+        /* new backups wrap the database in .db; older ones were the
+           database itself, so both are accepted */
+        const db   = (d && d.db) ? d.db : d;
+        const sync = (d && d.sync) ? d.sync : null;
+        if(!db || !Array.isArray(db.items)) throw 0;
+
+        const n = db.items.length;
+        const when = d && d.exported ? String(d.exported).slice(0,10) : null;
+        if(!confirm(`Replace your crate with this backup?\n\n`
+          + `${n} record${n===1?'':'s'}${when ? `, saved ${when}` : ''}.\n`
+          + `You currently have ${DB.items.length}. This cannot be undone.`)) return;
+
+        DB = Object.assign({items:[], shelves:['Main'], token:'', curr:'GBP'}, db);
+        const gotSync = sync ? Sync.importSettings(sync) : false;
+
+        /* Write it out now. The old code called load() here, which read
+           the PREVIOUS data straight back over the top before the
+           debounced save had run — the restore undid itself. */
+        store.set('crate.db', DB);
+        save();
+
+        $('#tok').value  = DB.token || '';
+        $('#curr').value = DB.curr  || 'GBP';
+        fillSyncForm();
+        renderAll();
+        toast(`Restored ${n} record${n===1?'':'s'}`
+              + (gotSync ? ' and your sync settings' : ''), 4200);
       } else importCsv(r.result);
     }catch(err){ toast('Could not read that file'); }
   };
