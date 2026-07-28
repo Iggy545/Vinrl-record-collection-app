@@ -71,9 +71,6 @@ if ([string]::IsNullOrWhiteSpace(($dirty -join ''))) {
 # ── stage everything, then read the change set back ──────────────────────
 git add -A | Out-Null
 
-git rev-parse --verify HEAD 2>$null | Out-Null
-$hasHistory = ($LASTEXITCODE -eq 0)
-
 $nameStatus = @(git diff --cached --name-status)
 $numStat = @(git diff --cached --numstat)
 
@@ -191,8 +188,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Info "Committed v$next - $Message"
 
-if ($hasHistory) { git tag -f "v$next" | Out-Null }
-else { git tag "v$next" | Out-Null }
+# Annotated, not lightweight - 'git push --follow-tags' below ignores
+# lightweight tags, so the version markers would never reach GitHub.
+git tag -f -a "v$next" -m "v$next - $Message" | Out-Null
 
 # ── push ─────────────────────────────────────────────────────────────────
 if ($NoPush) {
