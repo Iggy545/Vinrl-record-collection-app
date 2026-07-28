@@ -1179,34 +1179,113 @@ function parseCsv(text){
   return rows.filter(r => r.some(x => x.trim()!==''));
 }
 
+/* ── tracklists embedded in a CSV column ────────────────────
+   Collection apps export a tracklist as one line per track:
+       A1. The Drill (Evacuation Mix) (7:40)
+   The position letters only ever run A-H on a record, so requiring
+   that stops a title like "Mr. Vain" losing its "Mr." to the position.
+   Only a trailing (m:ss) counts as a duration - mix names live in
+   brackets too, and they're part of the title. */
+function parseTrackLines(text){
+  return String(text||'').split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
+    let pos = '', title = line, dur = '';
+    const m = title.match(/^([A-H]{1,3}\d{0,3}|\d{1,3})\.\s+(.+)$/);
+    if(m){ pos = m[1]; title = m[2].trim(); }
+    const d = title.match(/\s*\((\d{1,2}:\d{2})\)$/);
+    if(d){ dur = d[1]; title = title.slice(0, d.index).trim(); }
+    return {pos, title: title || 'Untitled', artist:'', dur, bpm:null, key:''};
+  });
+}
+
+/* Some exports carry a second tracklist column with the artist in front
+   of each title - the only place a compilation's real artists appear.
+   Take the artist from it rather than the whole line, and only when the
+   rich title is exactly "<someone> - <the plain title>", so a release
+   like "Rich Pickings - Volume III" can't get split down its own dash. */
+function mergeTrackArtists(tracks, richText){
+  const rich = parseTrackLines(richText);
+  if(rich.length !== tracks.length) return tracks;
+  tracks.forEach((t, i) => {
+    const suffix = ' - ' + t.title;
+    const rt = rich[i].title;
+    if(rt.length > suffix.length && rt.endsWith(suffix)){
+      t.artist = rt.slice(0, rt.length - suffix.length).trim();
+    }
+  });
+  return tracks;
+}
+
+/* "Barcode: 044006394510 (Scanned)" among matrix numbers and rights
+   societies. The scanned one is the one a camera will match later. */
+function barcodeFrom(text){
+  let fallback = '';
+  for(const line of String(text||'').split(/\r?\n/)){
+    const m = line.match(/^\s*Barcode:\s*(.+)$/i);
+    if(!m) continue;
+    const digits = m[1].replace(/\D/g, '');
+    if(digits.length < 8) continue;
+    if(/\(scanned\)/i.test(line)) return digits;
+    if(!fallback) fallback = digits;
+  }
+  return fallback;
+}
+
 function importCsv(text){
-  const rows = parseCsv(text);
+  const rows = parseCsv(text.replace(/^﻿/, ''));
   if(rows.length < 2){ toast('That CSV looks empty'); return; }
   const head = rows[0].map(h => h.trim());
   const ix = n => head.findIndex(h => h.toLowerCase() === n.toLowerCase());
   const g = (r, n) => { const j = ix(n); return j>=0 ? (r[j]||'').trim() : ''; };
-  let added = 0;
+  /* Same field, different spelling depending on which app wrote the file.
+     First name that carries a value wins, so order matters: AlbumTitle
+     beats Title because some exports put "Artist - Album" in Title. */
+  const pick = (r, ...names) => { for(const n of names){ const v = g(r, n); if(v) return v; } return ''; };
+
+  let added = 0, withTracks = 0;
   rows.slice(1).forEach(r => {
-    const id = parseInt(g(r,'release_id'),10);
-    const artist = g(r,'Artist'), title = g(r,'Title');
+    const artist = pick(r, 'Artist', 'ArtistSort');
+    const title  = pick(r, 'AlbumTitle', 'Title');
     if(!artist && !title) return;
-    const shelf = g(r,'CollectionFolder') || DB.shelves[0] || 'Main';
+
+    const shelf = pick(r, 'CollectionFolder', 'Shelf') || DB.shelves[0] || 'Main';
     if(shelf && !DB.shelves.includes(shelf)) DB.shelves.push(shelf);
+
+    const tracks = mergeTrackArtists(
+      parseTrackLines(pick(r, 'Tracklist', 'Tracklist with Artists')),
+      pick(r, 'Tracklist with Artists'));
+    if(tracks.length) withTracks++;
+
+    const paid = parseFloat(pick(r, 'Price').replace(/[^\d.]/g, ''));
+
     DB.items.push({
       uid:'i'+Date.now()+Math.random().toString(36).slice(2,7),
-      id: id || 0, artist: artist||'Unknown artist', title: title||'Untitled',
-      year: parseInt(g(r,'Released'),10) || '', label: g(r,'Label'),
-      catno: g(r,'Catalog#'), country:'', format: g(r,'Format'), genres:[],
-      art:'', tracks:[], low:null, forSale:null, have:null, want:null, barcode:'',
-      media: unGM(g(r,'Collection Media Condition')),
-      sleeve: unGM(g(r,'Collection Sleeve Condition')),
-      paid:null, notes: g(r,'Collection Notes'), shelf,
-      added: g(r,'Date Added') || new Date().toISOString(), priced:0
+      id: parseInt(pick(r, 'release_id', 'DiscogsReleaseId'), 10) || 0,
+      artist: artist || 'Unknown artist',
+      title: title || 'Untitled',
+      year: parseInt(pick(r, 'Released'), 10) || '',
+      label: pick(r, 'Label'),
+      catno: pick(r, 'Catalog#', 'CatNo'),
+      country: pick(r, 'Country'),
+      format: pick(r, 'Format'),
+      genres: pick(r, 'Genres').split(/[,;\n]/).map(s => s.trim()).filter(Boolean),
+      art:'', tracks,
+      low:null, forSale:null, have:null, want:null,
+      barcode: barcodeFrom(pick(r, 'Identifiers')),
+      media: unGM(pick(r, 'Collection Media Condition')),
+      sleeve: unGM(pick(r, 'Collection Sleeve Condition')),
+      paid: isFinite(paid) && paid > 0 ? paid : null,
+      notes: pick(r, 'Collection Notes', 'Notes'),
+      shelf,
+      added: pick(r, 'Date Added', 'AddedAt') || new Date().toISOString(),
+      priced: 0
     });
     added++;
   });
+
   save(); renderAll();
-  toast(added + ' records imported. Tap “Fill in from Discogs” in Setup to pull artwork and tracklists.', 5200);
+  toast(`${added} records imported`
+      + (withTracks ? ` · ${withTracks} came with tracklists` : '')
+      + '. Tap “Fill in from Discogs” in Setup for artwork and prices.', 5600);
 }
 
 /* ── filling in a CSV import ────────────────────────────────

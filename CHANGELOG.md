@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.3.0 - 2026-07-28 13:57
+
+Import tracklists, Discogs IDs, shelves and prices from collection-app CSV exports
+
+- Modified `crate.html` (+93/-14)
+
 ## 0.2.0 - 2026-07-28 13:46
 
 Add 'Fill in from Discogs' so CSV imports get artwork and tracklists
