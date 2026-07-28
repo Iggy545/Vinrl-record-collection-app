@@ -171,7 +171,9 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 
 /* ── shelves, each its own crate ──────────────────────────── */
 .shelfhead{display:flex;align-items:center;gap:10px;margin:26px 0 10px}
-.shelfhead .eyebrow{margin:0}
+.shelfhead .eyebrow{margin:0;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.shelfhead .ghost{flex:none}
 .shelfhead .spacer{flex:1}
 .shelfGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .shelfTile{background:var(--wax);border:1px solid var(--groove);border-radius:14px;
@@ -366,14 +368,14 @@ nav button.on{color:var(--sticker)}
   <div class="shelfhead">
     <div class="eyebrow">Shelves</div>
     <div class="spacer"></div>
-    <button class="ghost" id="btnShelfEdit">rearrange</button>
+    <button class="ghost" id="btnShelfEdit">reorder shelves</button>
   </div>
   <div class="shelfGrid" id="shelfGrid"></div>
 
   <div class="shelfhead">
     <div class="eyebrow" id="crateNote">Flick through</div>
     <div class="spacer"></div>
-    <button class="ghost" id="btnCrateArrange">arrange</button>
+    <button class="ghost" id="btnCrateArrange">arrange records</button>
   </div>
   <div class="crate-rail"><div class="crate" id="crate"></div></div>
 
@@ -416,7 +418,7 @@ nav button.on{color:var(--sticker)}
   <div class="shelfhead" id="arrangeBar" style="display:none">
     <div class="eyebrow" id="arrangeNote"></div>
     <div class="spacer"></div>
-    <button class="ghost" id="btnArrange">arrange</button>
+    <button class="ghost" id="btnArrange">arrange records</button>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -522,6 +524,8 @@ nav button.on{color:var(--sticker)}
   <div class="panel">
     <button class="btn quiet" id="btnWipe" style="color:var(--bad);border-color:var(--bad)">Delete everything</button>
   </div>
+
+  <p class="hint" style="text-align:center;margin-top:18px">Crate v<span id="appVer">—</span></p>
   <div style="height:20px"></div>
 </section>
 
@@ -544,6 +548,11 @@ nav button.on{color:var(--sticker)}
    GitHub Pages. Tries window.storage, then localStorage, then
    memory (session only).
    ══════════════════════════════════════════════════════════ */
+/* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
+   bottom of Setup so you can tell at a glance which build a device is
+   actually running — a cached page looks identical otherwise. */
+const APP_VERSION = '0.9.2';
+
 const mem = {};
 const store = {
   async get(k){
@@ -1199,7 +1208,7 @@ function updateCrateBar(){
   const btn = $('#btnCrateArrange');
   if(btn){
     btn.style.display = DB.shelves.length ? '' : 'none';
-    btn.textContent = crateEdit ? 'done' : 'arrange';
+    btn.textContent = crateEdit ? 'done' : 'arrange records';
   }
   const note = $('#crateNote');
   if(note) note.textContent = crateEdit
@@ -1537,7 +1546,7 @@ function updateArrangeBar(){
   const shelf = $('#shelfFilter').value;
   if(!usable) recEdit = false;
   $('#btnArrange').style.display = DB.shelves.length ? '' : 'none';
-  $('#btnArrange').textContent = recEdit ? 'done' : 'arrange';
+  $('#btnArrange').textContent = recEdit ? 'done' : 'arrange records';
   $('#arrangeNote').textContent = recEdit
     ? 'Drag to reorder · drop on a shelf tile to move it there'
     : (shelf ? 'Shelf ' + shelf : 'Your order');
@@ -2054,7 +2063,7 @@ let importMode = 'csv';
    others shuffle live; DB.shelves is kept in step and saved on drop. */
 $('#btnShelfEdit').onclick = () => {
   shelfEdit = !shelfEdit;
-  $('#btnShelfEdit').textContent = shelfEdit ? 'done' : 'rearrange';
+  $('#btnShelfEdit').textContent = shelfEdit ? 'done' : 'reorder shelves';
   renderShelfGrid();
 };
 
@@ -2361,6 +2370,7 @@ document.addEventListener('visibilitychange', () => { if(document.hidden) stopCa
 (async () => {
   await load();
   renderAll(); renderQueue();
+  $('#appVer').textContent = APP_VERSION;
   fillSyncForm();
   /* Firebase keeps the sign-in from last time, so reconnect quietly.
      If it needs a password the panel says so rather than nagging. */

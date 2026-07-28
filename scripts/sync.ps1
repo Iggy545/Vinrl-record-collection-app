@@ -179,6 +179,19 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($changelogFile, $body, $utf8)
 [System.IO.File]::WriteAllText($versionFile, "$next`r`n", $utf8)
 
+# Stamp the version into the app itself, so a device can be asked which
+# build it is running. Without this a stale cached page is indistinguishable
+# from a current one.
+$appFile = Join-Path $repo 'index.html'
+if (Test-Path $appFile) {
+    $app = [System.IO.File]::ReadAllText($appFile)
+    $stamped = [regex]::Replace($app, "const APP_VERSION = '[^']*';", "const APP_VERSION = '$next';", 1)
+    if ($stamped -ne $app) {
+        [System.IO.File]::WriteAllText($appFile, $stamped, $utf8)
+        Write-Info "Stamped v$next into index.html"
+    }
+}
+
 # ── commit ───────────────────────────────────────────────────────────────
 git add -A | Out-Null
 git commit -m "v$next - $Message" | Out-Null

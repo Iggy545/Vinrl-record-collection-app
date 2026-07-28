@@ -4,6 +4,13 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.9.2 - 2026-07-28 17:37
+
+Label the two arrange buttons distinctly and show the app version in Setup
+
+- Modified `index.html` (+17/-7)
+- Modified `scripts/sync.ps1` (+13/-0)
+
 ## 0.9.1 - 2026-07-28 17:19
 
 Allow arranging without picking a shelf first, so records can be dragged onto a shelf from the all-shelves view
