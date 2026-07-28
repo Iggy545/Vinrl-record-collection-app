@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.0 - 2026-07-28 18:18
+
+Show every Discogs match when you search, and let you pick the pressing
+
+- Modified `index.html` (+99/-1)
+
 ## 0.11.0 - 2026-07-28 18:11
 
 Back up settings as well as records, and stop restore overwriting itself

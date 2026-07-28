@@ -140,6 +140,26 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
   color:rgba(255,255,255,.92);text-shadow:0 1px 2px rgba(0,0,0,.8)}
 .spine .tab{position:absolute;top:0;left:0;right:0;height:5px;background:rgba(255,255,255,.25)}
 .crate-empty{padding:34px 16px;text-align:center;color:var(--dust);font-size:14px}
+
+/* ── choosing which Discogs pressing you actually own ─────── */
+.picklist{display:flex;flex-direction:column;gap:8px;max-height:56vh;overflow-y:auto;
+  margin:0 -2px;padding:0 2px}
+.pick{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);padding:8px}
+.pick:hover{border-color:var(--dust)}
+.pick img,.pick .noimg{width:50px;height:50px;flex:none;border-radius:4px;object-fit:cover;
+  background:var(--ink);border:1px solid var(--groove);display:block}
+.pick .who{min-width:0;flex:1}
+.pick .who b{font-size:13.5px;font-weight:500;line-height:1.3;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.pick .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.pick .add{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  font-weight:700;color:var(--sticker-ink);background:var(--sticker);
+  padding:6px 9px;border-radius:4px;flex:none}
+.pick .have{position:static;transform:none;flex:none;background:var(--groove);color:var(--dust);
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:4px 6px;border-radius:3px;
+  letter-spacing:.08em}
 /* The rail keeps scrolling normally while arranging — you tap to lift a
    record and tap again to place it, so the finger is never held down. */
 .crate.editing .spine{cursor:grab;animation:jiggle .8s ease-in-out infinite}
@@ -357,6 +377,7 @@ nav button.on{color:var(--sticker)}
     <input type="text" id="manual" placeholder="5033197130729 / TIDY123 / Binary Finary" autocomplete="off">
     <button class="btn" id="btnFind" style="flex:0 0 88px">Find</button>
   </div>
+  <p class="hint" style="margin:8px 0 0">Find shows you every pressing Discogs has, so you can pick the one you own. Camera scanning skips the asking and queues them.</p>
   <div class="row" style="margin-top:8px">
     <button class="btn quiet" id="btnPaste">Paste Discogs link</button>
     <button class="btn quiet" id="btnBlank">Add by hand</button>
@@ -558,7 +579,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.12.0';
 
 const mem = {};
 const store = {
@@ -1120,6 +1141,83 @@ function renderQueue(){
       <div class="st">${st}</div>
     </div>`;
   }).join('');
+}
+
+/* ══════════════════════════════════════════════════════════
+   searching by hand — show what Discogs found and let you choose
+   A barcode can match a dozen pressings: the original, the reissue,
+   the promo, a different country. Taking the first hit silently is how
+   you end up with the wrong tracklist and the wrong price, so a typed
+   search asks. Camera scanning still queues automatically — you don't
+   want a dialog per sleeve when working down a shelf.
+   ══════════════════════════════════════════════════════════ */
+const isBarcode = s => /^\d{8,14}$/.test(String(s||'').trim());
+
+async function searchAndChoose(code){
+  spin(true);
+  $('#manual').blur();
+  toast('Asking Discogs…', 1600);
+  try{
+    const hits = await findRelease(code);
+    spin(false);
+    if(!hits.length){
+      toast(`Discogs has nothing matching “${code}”`, 4200);
+      return;
+    }
+    openPicker(hits, code);
+  }catch(e){
+    spin(false);
+    toast(friendly(e), 4400);
+  }
+}
+
+function openPicker(hits, code){
+  const list = hits.slice(0, 12);
+  const rows = list.map((h, i) => {
+    const have = DB.items.some(x => x.id === h.id);
+    const bits = [h.year, (h.format||[]).join(' '), h.country,
+                  (h.label||[])[0], h.catno].filter(Boolean).join(' · ');
+    return `<button class="pick" data-i="${i}">
+      ${h.thumb ? `<img src="${esc(h.thumb)}" alt="" loading="lazy">` : '<span class="noimg"></span>'}
+      <span class="who">
+        <b>${esc(h.title || 'Untitled')}</b>
+        <span>${esc(bits || 'no details')}</span>
+      </span>
+      ${have ? '<span class="have">IN CRATE</span>' : '<span class="add">add</span>'}
+    </button>`;
+  }).join('');
+
+  $('#sheetBody').innerHTML = `
+    <h3 style="margin:0 0 4px">${hits.length} match${hits.length === 1 ? '' : 'es'} on Discogs</h3>
+    <p class="hint" style="margin:0 0 12px">for “${esc(code)}” — pick the pressing you actually own.
+      Check the year, format and catalogue number; they often differ between reissues.</p>
+    <div class="picklist">${rows}</div>
+    <button class="btn quiet" id="pickNone" style="margin-top:12px">None of these</button>`;
+
+  $('#pickNone').onclick = closeSheet;
+  $('#sheetBody').querySelectorAll('.pick').forEach(btn => {
+    btn.onclick = () => addChosen(list[+btn.dataset.i], code);
+  });
+  $('#scrim').classList.add('on');
+  $('#sheet').classList.add('on');
+}
+
+async function addChosen(hit, code){
+  if(!hit) return;
+  closeSheet();
+  spin(true);
+  toast('Fetching the details…', 2000);
+  try{
+    const rel = await fetchRelease(hit.id);
+    const it = toItem(rel, isBarcode(code) ? code.trim() : '');
+    const dup = DB.items.some(x => x.id === it.id);
+    DB.items.unshift(it);
+    save(); renderAll();
+    toast((dup ? 'Added another copy · ' : 'Added · ') + it.artist + ' — ' + it.title, 4200);
+  }catch(e){
+    toast(friendly(e), 4400);
+  }
+  spin(false);
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2036,7 +2134,7 @@ $('#btnStop').onclick = stopCam;
 $('#btnFind').onclick = () => {
   const v = $('#manual').value.trim();
   if(!v) return toast('Type a barcode, cat number or title first');
-  enqueue(v); $('#manual').value='';
+  searchAndChoose(v);          /* shows the matches rather than guessing */
 };
 $('#manual').addEventListener('keydown', e => { if(e.key==='Enter') $('#btnFind').click(); });
 
