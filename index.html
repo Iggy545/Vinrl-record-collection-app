@@ -611,7 +611,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.5';
+const APP_VERSION = '0.12.6';
 
 const mem = {};
 const store = {
@@ -1144,8 +1144,22 @@ async function mbFetch(url){
   return res.json();
 }
 
-/* Untested against a live key — written defensively and inert until
-   you paste one into Setup, so it can't misfire in the meantime. */
+/* GetSongBPM answers in OpenKey, not Camelot — a different wheel, and
+   the two are offset by 7: OpenKey 1d is C major, which is Camelot 8B.
+   'd' is major, 'm' is minor.
+   The plain key_of field is only ever the note ("G"), with no mode, so
+   it cannot be converted safely on its own — assuming major would be
+   wrong about half the time, and a confidently wrong key is the one
+   thing this whole flow exists to avoid. If open_key is missing we
+   hand back the tempo and no key. */
+function openKeyToCamelot(ok){
+  const m = /^(\d{1,2})\s*([dm])$/i.exec(String(ok || '').trim());
+  if(!m) return '';
+  const n = parseInt(m[1], 10);
+  if(!(n >= 1 && n <= 12)) return '';
+  return (((n + 6) % 12) + 1) + (m[2].toLowerCase() === 'm' ? 'A' : 'B');
+}
+
 async function fromGetSongBpm(artist, title){
   const apiKey = (DB.bpmKey || '').trim();
   if(!apiKey || !title) return null;
@@ -1156,10 +1170,8 @@ async function fromGetSongBpm(artist, title){
   const j = await res.json();
   const hit = j && Array.isArray(j.search) ? j.search[0] : null;
   if(!hit || hit.error) return null;
-  const bpm = parseFloat(hit.tempo);
-  /* they return a Camelot code on some plans and a key name on others */
-  const cam = /^\d{1,2}[AB]$/i.test(String(hit.camelot||'')) ? String(hit.camelot).toUpperCase()
-            : toCamelot((hit.key_of||'').split(' ')[0], hit.key_of || hit.mode || '');
+  const bpm = parseFloat(hit.tempo);          /* comes back as a string */
+  const cam = openKeyToCamelot(hit.open_key);
   if(!(bpm > 0) && !cam) return null;
   return {
     bpm: bpm > 0 ? Math.round(bpm*10)/10 : null,
