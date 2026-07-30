@@ -638,7 +638,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.8';
+const APP_VERSION = '0.12.9';
 
 const mem = {};
 const store = {
@@ -1008,10 +1008,17 @@ function friendly(e){
   return m[e.message] || ('Discogs error: ' + e.message);
 }
 
-/* search by barcode, then catno, then free text */
-async function findRelease(codeRaw){
+/* search by barcode, then catno, then free text.
+   `parts` is [artist, title] when a cover read gave us two separate lines:
+   naming the fields beats one blob in q= by a distance, and it also skips
+   the catno attempt, which for a cover read was never going to hit. The
+   free-text try still follows, so a sleeve laid out title-over-artist —
+   or a line that came back garbled — is not left with nothing. */
+async function findRelease(codeRaw, parts){
   const code = codeRaw.trim();
-  const tries = /^\d{8,14}$/.test(code)
+  const tries = (parts && parts.length === 2)
+    ? [{artist: parts[0], release_title: parts[1]}, {q:code}]
+    : /^\d{8,14}$/.test(code)
     ? [{barcode:code}, {q:code}]
     : [{catno:code}, {q:code}];
   for(const p of tries){
@@ -1329,12 +1336,12 @@ function renderQueue(){
    ══════════════════════════════════════════════════════════ */
 const isBarcode = s => /^\d{8,14}$/.test(String(s||'').trim());
 
-async function searchAndChoose(code){
+async function searchAndChoose(code, parts){
   spin(true);
   $('#manual').blur();
   toast('Asking Discogs…', 1600);
   try{
-    const hits = await findRelease(code);
+    const hits = await findRelease(code, parts);
     spin(false);
     if(!hits.length){
       toast(`Discogs has nothing matching “${code}”`, 4200);
@@ -1558,13 +1565,45 @@ function boostContrast(c){
 const tidyCatno = s => String(s||'').toUpperCase()
   .replace(/[^A-Z0-9 \-\/\.]/g, ' ').replace(/\s+/g, ' ').trim();
 
-/* Whatever is set largest on a cover is nearly always the artist and
-   the title, and Discogs' free-text search wants exactly those two. */
-function tidyCover(s){
-  const lines = String(s||'').split('\n')
-    .map(l => l.replace(/[^A-Za-z0-9&'\- ]/g, ' ').replace(/\s+/g, ' ').trim())
-    .filter(l => l.length >= 3 && /[A-Za-z]/.test(l));
-  return lines.sort((a, b) => b.length - a.length).slice(0, 2).join(' ').trim();
+const tidyLine = s => String(s||'').replace(/[^A-Za-z0-9&'\- ]/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+const usableLine = t => t.length >= 3 && /[A-Za-z]/.test(t);
+
+/* ── picking the artist and title off a cover ───────────────
+   Whatever is set largest on a sleeve is nearly always the artist and
+   the title. This used to rank by how *long* each line was, which is a
+   different thing entirely — a label strapline or a "Manufactured in
+   the EU" line is longer than "ORBITAL" every time, and won every time.
+   Tesseract hands back a bbox per line, so rank by cap height instead:
+   the tallest two lines are the two set biggest.
+
+   Lines the engine itself wasn't sure about are dropped first — a 30%
+   confidence line is noise, and noise in the search string is worse
+   than a shorter search string.
+
+   Returns top-to-bottom, because artist over title is the usual layout
+   and findRelease uses that order to name the Discogs fields. */
+const LINE_CONF_MIN = 55;
+function coverLines(data){
+  const out = [];
+  (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p =>
+    (p.lines || []).forEach(l => {
+      const t = tidyLine(l.text);
+      if(!usableLine(t)) return;
+      if((l.confidence || 0) < LINE_CONF_MIN) return;
+      const box = l.bbox || {};
+      out.push({t, h: (box.y1 - box.y0) || 0, y: box.y0 || 0});
+    })));
+  if(!out.length) return [];
+  return out.sort((a, b) => b.h - a.h).slice(0, 2)
+            .sort((a, b) => a.y - b.y).map(l => l.t);
+}
+
+/* Belt and braces: if a Tesseract build ever stops handing back blocks,
+   fall back to the old longest-lines guess rather than reading nothing. */
+function coverFallback(s){
+  return String(s||'').split('\n').map(tidyLine).filter(usableLine)
+    .sort((a, b) => b.length - a.length).slice(0, 2);
 }
 
 async function readNow(){
@@ -1578,14 +1617,24 @@ async function readNow(){
   try{
     if(tight) boostContrast(shot);
     const w = await ocrReady();
+    /* PSM 6 says "one uniform block of text", which a sleeve never is —
+       the type is scattered around the artwork in separate clumps. PSM 11
+       is sparse text: find whatever is there, wherever it is. */
     await w.setParameters(tight
       ? {tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ', tessedit_pageseg_mode:'7'}
-      : {tessedit_char_whitelist:'', tessedit_pageseg_mode:'6'});
+      : {tessedit_char_whitelist:'', tessedit_pageseg_mode:'11'});
     const {data} = await w.recognize(shot);
-    const text = tight ? tidyCatno(data.text) : tidyCover(data.text);
+    let text, parts = null;
+    if(tight){
+      text = tidyCatno(data.text);
+    }else{
+      parts = coverLines(data);
+      if(!parts.length) parts = coverFallback(data.text);
+      text = parts.join(' ').trim();
+    }
     spin(false); ocrBusy = false;
     if(!text){ toast('Nothing legible there — more light, and fill the box', 4400); return; }
-    confirmRead(text, Math.round(data.confidence || 0));
+    confirmRead(text, Math.round(data.confidence || 0), parts);
   }catch(e){
     spin(false); ocrBusy = false;
     toast('The text reader needs an internet connection the first time', 4600);
@@ -1595,7 +1644,7 @@ async function readNow(){
 /* Text read off a photographed sleeve is never certain enough to
    search blind, so it proposes and you confirm. Cheap to do now that
    the camera closes after every read anyway. */
-function confirmRead(text, conf){
+function confirmRead(text, conf, parts){
   const kind = ocrKind === 'catno' ? 'catalogue number' : 'cover';
   $('#sheetBody').innerHTML = `
     <h3 style="margin:0 0 4px">Read off the ${kind}</h3>
@@ -1608,7 +1657,12 @@ function confirmRead(text, conf){
   $('#ocrGo').onclick = () => {
     const v = $('#ocrText').value.trim();
     closeSheet();
-    if(v) searchAndChoose(v);
+    if(!v) return;
+    /* Only hand the split lines to Discogs if they are still what was
+       read — once you have edited the box we no longer know which half
+       is the artist, so it goes as free text, exactly as before. */
+    const unedited = parts && parts.length === 2 && v === parts.join(' ').trim();
+    searchAndChoose(v, unedited ? parts : null);
   };
   $('#ocrAgain').onclick = () => { closeSheet(); startCam('ocr'); };
   $('#scrim').classList.add('on'); $('#sheet').classList.add('on');
