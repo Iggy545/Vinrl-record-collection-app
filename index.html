@@ -306,6 +306,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .tap{flex:0 0 52px;padding:8px 0;border:1px solid var(--groove);border-radius:8px;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--dust);text-align:center}
+.ed .bot a.tap{text-decoration:none}
 .tap.live{border-color:var(--sticker);color:var(--sticker)}
 
 /* ── sheet ────────────────────────────────────────────────── */
@@ -638,7 +639,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.10';
+const APP_VERSION = '0.12.11';
 
 const mem = {};
 const store = {
@@ -1115,6 +1116,21 @@ function itemValue(it){
   return it.low * m;
 }
 const money = n => n==null ? '—' : sym() + n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+/* ── Hearing a record ────────────────────────────────────────
+   The query is built at the moment you tap it and nothing is
+   stored, so there is no backfill, it can never go stale, and a
+   record added by hand gets one just the same as a Discogs one.
+   YouTube Music rather than YouTube: its results are songs and
+   albums, so you skip the reaction videos and hour-long loops.
+   Declared up here because the record sheet is a long way below
+   and a const used above its declaration is a dead zone throw. */
+const ytSearch = (...parts) =>
+  'https://music.youtube.com/search?q=' +
+  encodeURIComponent(parts.filter(Boolean).join(' ').trim());
+/* toItem() falls back to 'Unknown artist', which would otherwise go into
+   the search box as two words that match nothing. */
+const ytArtist = a => a === 'Unknown artist' ? '' : a;
 
 /* ══════════════════════════════════════════════════════════
    Camelot wheel — 1A…12B, plus the musical key each one means
@@ -2451,6 +2467,8 @@ function openSheet(uid){
                  placeholder="BPM" min="40" max="300" step="0.1" inputmode="decimal">
           <button class="tap" data-i="${i}">Tap</button>
           <select class="tKey" data-i="${i}">${keyOpts(t.key||'', '— key —')}</select>
+          ${t.title ? `<a class="tap" href="${esc(ytSearch(t.artist || ytArtist(it.artist), t.title))}"
+             target="_blank" rel="noopener" title="Find this track on YouTube Music">Play</a>` : ''}
         </div>
       </div>`).join('')
       : '<p class="hint">No tracklist on this one. Add the tracks you care about.</p>'}
@@ -2462,6 +2480,9 @@ function openSheet(uid){
     <div class="row" style="margin-top:18px">
       <button class="btn quiet" id="sRefresh">Refresh from Discogs</button>
       <a class="btn quiet" href="https://www.discogs.com/release/${it.id}" target="_blank" rel="noopener" style="text-decoration:none">Open on Discogs</a>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <a class="btn quiet" href="${esc(ytSearch(ytArtist(it.artist), it.title))}" target="_blank" rel="noopener" style="text-decoration:none">Find on YouTube Music</a>
     </div>
     <button class="btn quiet" id="sDelete" style="margin-top:8px;color:var(--bad);border-color:var(--bad)">Remove from crate</button>
   `;
