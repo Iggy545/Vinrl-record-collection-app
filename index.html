@@ -174,6 +174,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .rec.picked{animation:none}
 .rec.picked .sleeve{outline:2px solid var(--sticker);outline-offset:3px}
 .rec.picked h4{color:var(--sticker)}
+/* ticked for a bulk move. Green, not orange, so a set of forty waiting to
+   be re-filed never reads as one record lifted out of the crate. */
+.spine.sel{animation:none;transform:translateY(-10px);
+  outline:2px solid var(--ok);outline-offset:1px}
+.spine.sel .tab{background:var(--ok)}
+.rec.sel{animation:none}
+.rec.sel .sleeve{outline:2px solid var(--ok);outline-offset:3px}
+.rec.sel .sleeve::after{content:'✓';position:absolute;top:6px;left:6px;
+  width:21px;height:21px;border-radius:50%;background:var(--ok);color:var(--ink);
+  font-size:12px;font-weight:700;display:grid;place-items:center}
+.selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-2px 0 12px}
+.selbar .ghost{flex:none}
+.ghost:disabled{opacity:.38;pointer-events:none}
 
 /* ── grid ─────────────────────────────────────────────────── */
 .tools{display:flex;gap:8px;margin:14px 0}
@@ -420,6 +433,12 @@ nav button.on{color:var(--sticker)}
     <div class="spacer"></div>
     <button class="ghost" id="btnCrateArrange">arrange records</button>
   </div>
+  <div class="selbar" id="crateSelBar" style="display:none">
+    <button class="ghost" id="btnCrateSelect">select several</button>
+    <button class="ghost" data-sel-when data-sel-all="crate">select all</button>
+    <button class="ghost" data-sel-when data-sel-none>clear</button>
+    <button class="ghost" data-sel-when data-sel-place>place them</button>
+  </div>
   <div class="crate-rail"><div class="crate" id="crate"></div></div>
 
   <div class="toggle" id="mode">
@@ -462,6 +481,12 @@ nav button.on{color:var(--sticker)}
     <div class="eyebrow" id="arrangeNote"></div>
     <div class="spacer"></div>
     <button class="ghost" id="btnArrange">arrange records</button>
+  </div>
+  <div class="selbar" id="gridSelBar" style="display:none">
+    <button class="ghost" id="btnSelect">select several</button>
+    <button class="ghost" data-sel-when data-sel-all="grid">select all</button>
+    <button class="ghost" data-sel-when data-sel-none>clear</button>
+    <button class="ghost" data-sel-when data-sel-place>place them</button>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -611,7 +636,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.6';
+const APP_VERSION = '0.12.7';
 
 const mem = {};
 const store = {
@@ -1632,12 +1657,17 @@ function updateCrateBar(){
     btn.style.display = DB.shelves.length ? '' : 'none';
     btn.textContent = crateEdit ? 'done' : 'arrange records';
   }
+  const sbar = $('#crateSelBar');
+  if(sbar) sbar.style.display = crateEdit ? 'flex' : 'none';
+  updateSelBars();
   const note = $('#crateNote');
   if(note) note.textContent = !crateEdit
     ? (shelf ? 'Flick through · shelf ' + shelf : 'Flick through')
+    : selMode ? selNote()
     : picked ? 'Now tap where it goes, or a shelf to move it'
              : 'Tap a record to pick it up';
   $('#crate').classList.toggle('editing', crateEdit);
+  paintSel();          /* which surface shows ticks follows the arrange flags */
 }
 
 function renderCrate(){
@@ -1828,9 +1858,117 @@ function placeBefore(targetUid){
   return true;
 }
 
+/* ── moving several at once ─────────────────────────────────
+   One at a time is fine for tidying, but re-filing a run of records —
+   everything a shelf has outgrown, or every record a search turned up —
+   meant the same two taps forty times over. Selecting is a mode inside
+   arranging rather than a third top-level state: taps tick instead of
+   lifting, and the same targets then do the same things to the whole
+   set. `ticked` holds uids, so it survives every re-render — and it is not
+   called `sel`, because the shelf-tile handler already has a local of that
+   name and the shadowing put this one in the temporal dead zone. */
+let selMode = false;
+const ticked = new Set();
+let selPlacing = false;         /* armed: the next tap says where the set goes */
+
+/* Always act in shelf order, never the order things were ticked in, so a
+   block of records keeps the arrangement it already had wherever it lands. */
+function selItems(){
+  return DB.items.filter(i => ticked.has(i.uid))
+    .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b));
+}
+/* The set is shared, but each surface only shows a tick where a tap would
+   actually land on one: outside its own arrange mode a tap opens the
+   record, so a green outline there would be a lie. */
+function paintSel(){
+  document.querySelectorAll('.rec.sel, .spine.sel').forEach(n => n.classList.remove('sel'));
+  if(!selMode || !ticked.size) return;
+  const where = [recEdit && '.rec[data-uid]', crateEdit && '.spine[data-uid]'].filter(Boolean);
+  if(!where.length) return;
+  document.querySelectorAll(where.join(',')).forEach(n => {
+    if(ticked.has(n.dataset.uid)) n.classList.add('sel');
+  });
+}
+function selNote(){
+  /* This sits in an eyebrow that ellipsises on a phone, so the count goes
+     first — it is the part you check before tapping a shelf. */
+  if(!ticked.size) return 'Tap records to tick them';
+  const n = ticked.size + ' ticked';
+  return selPlacing ? n + ' · tap where they go' : n + ' · tap a shelf';
+}
+/* The whole selection story lives in its own row under the arrange bar,
+   not beside it: the header's eyebrow ellipsises on a phone, and a second
+   button up there left no room for the count you tap a shelf on. */
+function updateSelBars(){
+  document.querySelectorAll('[data-sel-when]').forEach(b => b.style.display = selMode ? '' : 'none');
+  document.querySelectorAll('#btnCrateSelect, #btnSelect').forEach(b =>
+    b.textContent = selMode ? 'one at a time' : 'select several');
+  document.querySelectorAll('[data-sel-place]').forEach(b => {
+    b.textContent = selPlacing ? 'never mind' : 'place them';
+    b.disabled = !ticked.size;
+  });
+  document.querySelectorAll('[data-sel-none]').forEach(b => b.disabled = !ticked.size);
+}
+function repaintSel(){ paintSel(); updateCrateBar(); updateArrangeBar(); }
+function exitSel(){ selMode = false; ticked.clear(); selPlacing = false; renderList(); }
+
+/* Drop a whole set on a shelf, at the back, keeping the order it was
+   already in. Any of the set already sitting on that shelf is gathered up
+   with the rest rather than left where it was, so the set always ends up
+   together — half of it staying put is never what you meant. */
+function moveManyToShelf(items, shelfName){
+  if(!items.length || !DB.shelves.includes(shelfName)) return 0;
+  const uids = new Set(items.map(i => i.uid));
+  const froms = [...new Set(items.map(i => i.shelf))].filter(s => s !== shelfName);
+  const rest = DB.items.filter(i => i.shelf === shelfName && !uids.has(i.uid)).sort(bySlot);
+  items.forEach(i => i.shelf = shelfName);
+  renumber(rest.concat(items));
+  froms.forEach(s => renumber(DB.items.filter(i => i.shelf === s).sort(bySlot)));
+  return items.length;
+}
+
+/* Slot the whole set in just before `targetUid`, wherever that record sits —
+   the multi-record version of placeBefore. The target can't be inside the
+   set: there'd be nowhere to put the rest relative to it. */
+function placeManyBefore(items, targetUid){
+  const uids = new Set(items.map(i => i.uid));
+  const t = DB.items.find(i => i.uid === targetUid);
+  if(!items.length || !t || uids.has(targetUid)) return false;
+  const shelf = t.shelf;
+  const froms = [...new Set(items.map(i => i.shelf))].filter(s => s !== shelf);
+  const rest = DB.items.filter(i => i.shelf === shelf && !uids.has(i.uid)).sort(bySlot);
+  const at = rest.findIndex(i => i.uid === targetUid);
+  items.forEach(i => i.shelf = shelf);
+  rest.splice(at < 0 ? rest.length : at, 0, ...items);
+  renumber(rest);
+  froms.forEach(s => renumber(DB.items.filter(i => i.shelf === s).sort(bySlot)));
+  return true;
+}
+
+/* Both bulk actions end the same way. The ticks are dropped afterwards —
+   forty records left ticked is an accidental second move waiting to
+   happen — but select mode stays on, ready for the next batch. */
+function afterBulk(n, where){
+  ticked.clear(); selPlacing = false;
+  save(); renderAll();
+  toast(n + (n === 1 ? ' record' : ' records') + ' moved to shelf ' + where, 3400);
+}
+
 /* one tap on a record, in arrange mode: lift it, or place the lifted one */
 function tapRecord(uid){
   if(!uid) return;
+  if(selMode){
+    if(selPlacing){
+      const items = selItems();
+      if(!placeManyBefore(items, uid))
+        return toast('That one is in the set — tap a record outside it');
+      afterBulk(items.length, items[0].shelf);
+      return;
+    }
+    if(ticked.has(uid)) ticked.delete(uid); else ticked.add(uid);
+    repaintSel();
+    return;
+  }
   if(!picked){ setPicked(uid); return; }
   if(picked === uid){ setPicked(null); toast('Put back'); return; }
   if(placeBefore(uid)){
@@ -2058,14 +2196,23 @@ function updateArrangeBar(){
   const usable = MODE === 'sleeves' && $('#sort').value === 'shelf';
   bar.style.display = usable ? '' : 'none';
   const shelf = $('#shelfFilter').value;
-  if(!usable) recEdit = false;
+  /* Sorting by anything else drops you out of arranging. Selecting goes
+     with it, unless the rail is still arranging and can carry the set. */
+  if(!usable){
+    recEdit = false;
+    if(!crateEdit && selMode){ selMode = false; ticked.clear(); selPlacing = false; }
+  }
   $('#btnArrange').style.display = DB.shelves.length ? '' : 'none';
   $('#btnArrange').textContent = recEdit ? 'done' : 'arrange records';
+  $('#gridSelBar').style.display = recEdit ? 'flex' : 'none';
+  updateSelBars();
   $('#arrangeNote').textContent = !recEdit
     ? (shelf ? 'Shelf ' + shelf : 'Your order')
+    : selMode ? selNote()
     : picked ? 'Now tap where it goes, or a shelf to move it'
              : 'Tap a record to pick it up';
   $('#grid').classList.toggle('editing', recEdit);
+  paintSel();          /* which surface shows ticks follows the arrange flags */
 }
 
 function renderList(){
@@ -2075,6 +2222,7 @@ function renderList(){
   updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
   paintPicked();
+  paintSel();
 }
 /* renderShelfGrid and the rail both read the shelf filter, so they follow
    renderFilters. renderList draws the rail too, so changing the shelf
@@ -2759,6 +2907,14 @@ $('#btnShelfEdit').onclick = () => {
     const tile = e.target.closest('.shelfTile');
     if(!tile) return;
 
+    /* a set is ticked: this tap re-files the lot onto that shelf */
+    if(!shelfEdit && selMode && ticked.size){
+      const items = selItems(), to = tile.dataset.shelfName;
+      const n = moveManyToShelf(items, to);
+      if(n) afterBulk(n, to);
+      return;
+    }
+
     /* a record is lifted: this tap sends it to the end of that shelf */
     if(picked){
       const it = DB.items.find(i => i.uid === picked);
@@ -2784,9 +2940,40 @@ $('#btnShelfEdit').onclick = () => {
    dense and the order survives a reload and syncs to your devices. */
 $('#btnArrange').onclick = () => {
   recEdit = !recEdit;
-  if(!recEdit) setPicked(null);
+  if(!recEdit){ setPicked(null); if(!crateEdit) return exitSel(); }
   updateArrangeBar();
 };
+
+/* ── selecting several ──────────────────────────────────────
+   Both arrange bars drive the same set, so you can tick a few off the
+   rail and a few more off the sleeves before moving the lot. The buttons
+   are wired by data attribute rather than id for exactly that reason —
+   two bars, one behaviour, one handler. */
+$('#btnCrateSelect').onclick = $('#btnSelect').onclick = () => {
+  selMode = !selMode;
+  ticked.clear(); selPlacing = false;
+  if(selMode) setPicked(null);      /* a lifted record and a set can't both be live */
+  renderList();
+};
+/* "All" means what is actually on screen — the rail's own list, or the
+   sleeve grid's, filters and search included. That is what makes it
+   worth having: narrow to a shelf or a label first and one tap has the
+   exact run you wanted. The count in the bar keeps it honest, since the
+   rail stops at 150 spines. */
+document.querySelectorAll('[data-sel-all]').forEach(b => b.onclick = () => {
+  (b.dataset.selAll === 'crate' ? crateList() : visible()).forEach(i => ticked.add(i.uid));
+  selPlacing = false;
+  repaintSel();
+  toast(ticked.size + (ticked.size === 1 ? ' record ticked' : ' records ticked'));
+});
+document.querySelectorAll('[data-sel-none]').forEach(b => b.onclick = () => {
+  ticked.clear(); selPlacing = false; repaintSel();
+});
+document.querySelectorAll('[data-sel-place]').forEach(b => b.onclick = () => {
+  if(!ticked.size) return;
+  selPlacing = !selPlacing;
+  repaintSel();
+});
 
 (function wireRecordDrag(){
   const grid = $('#grid');
@@ -2795,7 +2982,7 @@ $('#btnArrange').onclick = () => {
   const tiles = () => [...grid.children].filter(c => c.classList.contains('rec'));
 
   grid.addEventListener('pointerdown', e => {
-    if(!recEdit) return;
+    if(!recEdit || selMode) return;      /* while selecting, a press is a tick */
     const rec = e.target.closest('.rec');
     if(!rec) return;
     dragEl = rec; dragUid = rec.dataset.uid; moved = false; overShelf = null;
@@ -2879,7 +3066,10 @@ $('#btnArrange').onclick = () => {
    as the visible window. */
 $('#btnCrateArrange').onclick = () => {
   crateEdit = !crateEdit;
-  if(!crateEdit) setPicked(null);       /* don't leave one lifted */
+  if(!crateEdit){
+    setPicked(null);                    /* don't leave one lifted */
+    if(!recEdit) return exitSel();      /* nor a set ticked with no bar to act on it */
+  }
   updateCrateBar();
 };
 
@@ -2890,7 +3080,7 @@ $('#btnCrateArrange').onclick = () => {
   const spines = () => [...rail.querySelectorAll('.spine')];
 
   rail.addEventListener('pointerdown', e => {
-    if(!crateEdit) return;
+    if(!crateEdit || selMode) return;    /* while selecting, a press is a tick */
     const sp = e.target.closest('.spine');
     if(!sp) return;
     dragEl = sp; dragUid = sp.dataset.uid; moved = false; overShelf = null;
@@ -3049,6 +3239,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
+    <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
