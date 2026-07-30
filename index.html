@@ -434,6 +434,7 @@ nav button.on{color:var(--sticker)}
     <button class="ghost" id="btnCrateArrange">arrange records</button>
   </div>
   <div class="selbar" id="crateSelBar" style="display:none">
+    <button class="ghost" data-undo>undo</button>
     <button class="ghost" id="btnCrateSelect">select several</button>
     <button class="ghost" data-sel-when data-sel-all="crate">select all</button>
     <button class="ghost" data-sel-when data-sel-none>clear</button>
@@ -483,6 +484,7 @@ nav button.on{color:var(--sticker)}
     <button class="ghost" id="btnArrange">arrange records</button>
   </div>
   <div class="selbar" id="gridSelBar" style="display:none">
+    <button class="ghost" data-undo>undo</button>
     <button class="ghost" id="btnSelect">select several</button>
     <button class="ghost" data-sel-when data-sel-all="grid">select all</button>
     <button class="ghost" data-sel-when data-sel-none>clear</button>
@@ -636,7 +638,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.7';
+const APP_VERSION = '0.12.8';
 
 const mem = {};
 const store = {
@@ -1759,6 +1761,7 @@ function fileNew(it){
    from the order its own records appear in — a record never picks up a
    slot belonging to a different shelf. */
 function renumberFromDom(nodes){
+  const before = placement();          /* only ever called after a drag moved something */
   const byShelf = {};
   nodes.forEach(n => {
     const it = DB.items.find(i => i.uid === n.dataset.uid);
@@ -1766,6 +1769,7 @@ function renumberFromDom(nodes){
     (byShelf[it.shelf] = byShelf[it.shelf] || []).push(it);
   });
   Object.keys(byShelf).forEach(s => renumber(byShelf[s]));
+  pushUndo(before);
 }
 
 /* ── dropping a record onto a shelf tile ────────────────────
@@ -1819,6 +1823,47 @@ function edgeScroll(y){
   if(y < 90) window.scrollBy(0, -18);
   else if(y > window.innerHeight - 90) window.scrollBy(0, 18);
 }
+/* ── undo, for arranging ────────────────────────────────────
+   A bulk move can shift forty records on one tap, and "which shelf were
+   they on before?" is not a question the app could answer afterwards.
+   So every arranging action snapshots where things sat first — uid, shelf
+   and slot, which is all any of them touch — and putting it back is just
+   restoring that map.
+
+   The snapshot is taken inside the five functions that actually move
+   records, not at the eight places that call them: a new way of moving a
+   record then gets undo for free, and no call site can forget.
+
+   In memory only. This is a way out of a fat-fingered tap, not a document
+   history, so it deliberately does not survive a reload. */
+const UNDO_MAX = 20;
+const undoStack = [];
+const placement = () => DB.items.map(i => ({uid: i.uid, shelf: i.shelf, slot: i.slot}));
+function pushUndo(before){
+  undoStack.push(before);
+  if(undoStack.length > UNDO_MAX) undoStack.shift();
+  updateSelBars();
+}
+function undoLast(){
+  const before = undoStack.pop();
+  if(!before) return toast('Nothing to undo');
+  const was = new Map(before.map(p => [p.uid, p]));
+  let n = 0;
+  DB.items.forEach(i => {
+    const p = was.get(i.uid);
+    if(!p) return;                       /* added since the snapshot — leave it alone */
+    if(i.shelf !== p.shelf || i.slot !== p.slot){ i.shelf = p.shelf; i.slot = p.slot; n++; }
+  });
+  /* A record added since the snapshot kept its own slot, which can now
+     collide with a restored one, so every shelf is renumbered dense again —
+     the same guarantee arranging by hand gives. */
+  DB.shelves.forEach(s => renumber(DB.items.filter(i => i.shelf === s).sort(bySlot)));
+  ticked.clear(); selPlacing = false;
+  setPicked(null);
+  save(); renderAll();
+  toast(n ? 'Put back — ' + n + (n === 1 ? ' record' : ' records') : 'Nothing to put back', 3000);
+}
+
 /* ── tap to pick up, tap to place ───────────────────────────
    Dragging a 26px spine along a rail that can't scroll is miserable on
    a phone and fiddly with a mouse, so this is the main way to move a
@@ -1848,6 +1893,7 @@ function placeBefore(targetUid){
   const a = DB.items.find(i => i.uid === picked);
   const b = DB.items.find(i => i.uid === targetUid);
   if(!a || !b || a === b) return false;
+  const before = placement();
   const from = a.shelf;
   a.shelf = b.shelf;
   const list = DB.items.filter(i => i.shelf === b.shelf && i.uid !== a.uid).sort(bySlot);
@@ -1855,6 +1901,7 @@ function placeBefore(targetUid){
   list.splice(at < 0 ? list.length : at, 0, a);
   renumber(list);
   if(from !== a.shelf) renumber(DB.items.filter(i => i.shelf === from).sort(bySlot));
+  pushUndo(before);
   return true;
 }
 
@@ -1900,6 +1947,12 @@ function selNote(){
    not beside it: the header's eyebrow ellipsises on a phone, and a second
    button up there left no room for the count you tap a shelf on. */
 function updateSelBars(){
+  /* how many steps are left is worth showing — it is the difference between
+     "I can back out of this" and "I have gone too far to bother" */
+  document.querySelectorAll('[data-undo]').forEach(b => {
+    b.disabled = !undoStack.length;
+    b.textContent = undoStack.length > 1 ? 'undo · ' + undoStack.length : 'undo';
+  });
   document.querySelectorAll('[data-sel-when]').forEach(b => b.style.display = selMode ? '' : 'none');
   document.querySelectorAll('#btnCrateSelect, #btnSelect').forEach(b =>
     b.textContent = selMode ? 'one at a time' : 'select several');
@@ -1918,12 +1971,14 @@ function exitSel(){ selMode = false; ticked.clear(); selPlacing = false; renderL
    together — half of it staying put is never what you meant. */
 function moveManyToShelf(items, shelfName){
   if(!items.length || !DB.shelves.includes(shelfName)) return 0;
+  const before = placement();
   const uids = new Set(items.map(i => i.uid));
   const froms = [...new Set(items.map(i => i.shelf))].filter(s => s !== shelfName);
   const rest = DB.items.filter(i => i.shelf === shelfName && !uids.has(i.uid)).sort(bySlot);
   items.forEach(i => i.shelf = shelfName);
   renumber(rest.concat(items));
   froms.forEach(s => renumber(DB.items.filter(i => i.shelf === s).sort(bySlot)));
+  pushUndo(before);
   return items.length;
 }
 
@@ -1934,6 +1989,7 @@ function placeManyBefore(items, targetUid){
   const uids = new Set(items.map(i => i.uid));
   const t = DB.items.find(i => i.uid === targetUid);
   if(!items.length || !t || uids.has(targetUid)) return false;
+  const before = placement();
   const shelf = t.shelf;
   const froms = [...new Set(items.map(i => i.shelf))].filter(s => s !== shelf);
   const rest = DB.items.filter(i => i.shelf === shelf && !uids.has(i.uid)).sort(bySlot);
@@ -1942,6 +1998,7 @@ function placeManyBefore(items, targetUid){
   rest.splice(at < 0 ? rest.length : at, 0, ...items);
   renumber(rest);
   froms.forEach(s => renumber(DB.items.filter(i => i.shelf === s).sort(bySlot)));
+  pushUndo(before);
   return true;
 }
 
@@ -1982,6 +2039,7 @@ function tapRecord(uid){
 
 function moveToShelf(item, shelfName){
   if(!item || !shelfName || shelfName === item.shelf) return false;
+  const before = placement();
   const from = item.shelf;
   item.shelf = shelfName;
   /* Clear the slot rather than asking nextSlot for one: the record is
@@ -1991,6 +2049,7 @@ function moveToShelf(item, shelfName){
   item.slot = null;
   renumber(DB.items.filter(i => i.shelf === shelfName).sort(bySlot));
   renumber(DB.items.filter(i => i.shelf === from).sort(bySlot));
+  pushUndo(before);
   return true;
 }
 
@@ -2960,6 +3019,7 @@ $('#btnCrateSelect').onclick = $('#btnSelect').onclick = () => {
    worth having: narrow to a shelf or a label first and one tap has the
    exact run you wanted. The count in the bar keeps it honest, since the
    rail stops at 150 spines. */
+document.querySelectorAll('[data-undo]').forEach(b => b.onclick = undoLast);
 document.querySelectorAll('[data-sel-all]').forEach(b => b.onclick = () => {
   (b.dataset.selAll === 'crate' ? crateList() : visible()).forEach(i => ticked.add(i.uid));
   selPlacing = false;
@@ -3239,7 +3299,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
-    <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination.</p>
+    <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
