@@ -638,7 +638,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.9';
+const APP_VERSION = '0.12.10';
 
 const mem = {};
 const store = {
@@ -1016,11 +1016,18 @@ function friendly(e){
    or a line that came back garbled — is not left with nothing. */
 async function findRelease(codeRaw, parts){
   const code = codeRaw.trim();
+  /* Discogs stores catalogue numbers inconsistently — "WAP 39" on one
+     release, "WAP39" on the next — and the catno search wants the shape
+     it holds. Trying the de-spaced form costs one extra call, and only
+     when the first has already missed. */
+  const tight = code.replace(/\s+/g, '');
+  const catTries = (tight !== code && tight.length >= 4)
+    ? [{catno:code}, {catno:tight}] : [{catno:code}];
   const tries = (parts && parts.length === 2)
     ? [{artist: parts[0], release_title: parts[1]}, {q:code}]
     : /^\d{8,14}$/.test(code)
     ? [{barcode:code}, {q:code}]
-    : [{catno:code}, {q:code}];
+    : catTries.concat([{q:code}]);
   for(const p of tries){
     const r = await dg('/database/search', Object.assign({type:'release', per_page:12}, p));
     if(r.results && r.results.length) return r.results;
@@ -1562,8 +1569,52 @@ function boostContrast(c){
   return c;
 }
 
+/* Lines the engine itself wasn't sure about are dropped before either
+   reader looks at them: a 30%-confidence line is noise, and noise in a
+   search string is worse than a shorter search string. Declared up here
+   because both readers use it and a `const` used above its declaration
+   sits in the temporal dead zone — see §5 of the working notes. */
+const LINE_CONF_MIN = 55;
+
 const tidyCatno = s => String(s||'').toUpperCase()
   .replace(/[^A-Z0-9 \-\/\.]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/* ── picking the catalogue number off a centre label ────────
+   The reticle is meant to hold the cat. no. and nothing else, but in
+   practice it catches the label name above it, or "SIDE A  45 RPM"
+   below. So read the whole crop and score each line on how much it
+   looks like a catalogue number rather than trusting the crop.
+
+   Everything a pressing plant stamps around the number — the label,
+   the speed, the country, the rights boilerplate — either has no digit
+   in it or is one of the stock words below, so it scores zero. */
+const CATNO_STOP = /\b(SIDE|RPM|STEREO|MONO|MADE|PRINTED|GERMANY|ENGLAND|FRANCE|USA|EU|RECORDS|RECORDINGS|RIGHTS|RESERVED|PUBLISHING|PRODUCED|DISTRIBUTED)\b/;
+function catnoScore(t){
+  if(!/\d/.test(t)) return 0;                 /* every catalogue number has one */
+  if(CATNO_STOP.test(t)) return 0;
+  if(t.length > 18) return 0;                 /* that is a sentence, not a number */
+  /* "A1" and friends are runout side marks, not catalogue numbers */
+  if(t.replace(/[^A-Z0-9]/g, '').length < 4) return 0;
+  let s = 10;
+  if(/^[A-Z]{1,8}([\s.\-][A-Z]{1,4})*[\s.\-]?\d{1,5}([\s.\-]?\d{1,4})*$/.test(t)) s += 20;  /* WAP 39, WARP LP 39 */
+  else if(/^\d{2,}([\s.\-]\d+)*$/.test(t)) s += 14;                                          /* 855 992-1 */
+  else s += 6;                                                                               /* mixed, less sure */
+  return s - Math.max(0, t.length - 12);      /* a catalogue number is compact */
+}
+function catnoFrom(data){
+  let best = '', bestScore = 0;
+  (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p =>
+    (p.lines || []).forEach(l => {
+      if((l.confidence || 0) < LINE_CONF_MIN) return;
+      const t = tidyCatno(l.text);
+      const s = catnoScore(t);
+      if(s > bestScore){ best = t; bestScore = s; }
+    })));
+  /* Nothing scored — the number is probably buried in a longer line, as on
+     a spine. Hand back the lot and let the free-text try in findRelease
+     deal with it, which is what used to happen to everything. */
+  return best || tidyCatno(data.text);
+}
 
 const tidyLine = s => String(s||'').replace(/[^A-Za-z0-9&'\- ]/g, ' ')
   .replace(/\s+/g, ' ').trim();
@@ -1577,13 +1628,8 @@ const usableLine = t => t.length >= 3 && /[A-Za-z]/.test(t);
    Tesseract hands back a bbox per line, so rank by cap height instead:
    the tallest two lines are the two set biggest.
 
-   Lines the engine itself wasn't sure about are dropped first — a 30%
-   confidence line is noise, and noise in the search string is worse
-   than a shorter search string.
-
    Returns top-to-bottom, because artist over title is the usual layout
    and findRelease uses that order to name the Discogs fields. */
-const LINE_CONF_MIN = 55;
 function coverLines(data){
   const out = [];
   (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p =>
@@ -1617,16 +1663,20 @@ async function readNow(){
   try{
     if(tight) boostContrast(shot);
     const w = await ocrReady();
-    /* PSM 6 says "one uniform block of text", which a sleeve never is —
-       the type is scattered around the artwork in separate clumps. PSM 11
-       is sparse text: find whatever is there, wherever it is. */
+    /* The two readers want opposite things, which is why they disagree.
+       A whole sleeve is never one block — the type is scattered around
+       the artwork in clumps — so the cover gets PSM 11, sparse text.
+       The reticle crop genuinely is one tight block, so the cat. no.
+       gets PSM 6. What it must not get is PSM 7, "a single text line":
+       the moment the box also catches the label name or "SIDE A" the
+       whole read collapses to junk, or to nothing at all. */
     await w.setParameters(tight
-      ? {tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ', tessedit_pageseg_mode:'7'}
+      ? {tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/. ', tessedit_pageseg_mode:'6'}
       : {tessedit_char_whitelist:'', tessedit_pageseg_mode:'11'});
     const {data} = await w.recognize(shot);
     let text, parts = null;
     if(tight){
-      text = tidyCatno(data.text);
+      text = catnoFrom(data);
     }else{
       parts = coverLines(data);
       if(!parts.length) parts = coverFallback(data.text);
