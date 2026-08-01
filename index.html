@@ -684,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.17';
+const APP_VERSION = '0.12.18';
 
 const mem = {};
 const store = {
@@ -1117,11 +1117,27 @@ function mergeTracks(fresh, old){
   const pool = (old||[]).slice();
   const take = pred => { const j = pool.findIndex(pred); return j<0 ? null : pool.splice(j,1)[0]; };
   const norm = s => String(s||'').trim().toLowerCase();
-  return fresh.map(t => {
+  const out = fresh.map(t => {
     const m = take(o => norm(o.title) === norm(t.title))
            || take(o => o.pos && o.pos === t.pos);
-    return m ? Object.assign(t, {bpm: m.bpm ?? null, key: m.key || '', genre: m.genre || ''}) : t;
+    if(!m) return t;                     /* genuinely new on Discogs */
+    /* Anything already filled in here wins, field by field — Discogs
+       only supplies what is still blank. A retitled track used to snap
+       back to Discogs' wording on every refresh. */
+    return {
+      pos:    m.pos    || t.pos,
+      title:  m.title  || t.title,
+      artist: m.artist || t.artist,
+      dur:    m.dur    || t.dur,
+      bpm:    m.bpm ?? null,
+      key:    m.key    || '',
+      genre:  m.genre  || ''
+    };
   });
+  /* Whatever is left never matched a Discogs track, so it is one you
+     added by hand. These used to be dropped on the floor by a refresh —
+     the tracklist was simply replaced. They are kept, on the end. */
+  return out.concat(pool);
 }
 function toItem(rel, scanned){
   const artist = (rel.artists||[]).map(a => a.name.replace(/\s*\(\d+\)$/,'')).join(' & ') || 'Unknown artist';
@@ -2881,7 +2897,7 @@ function openSheet(uid){
     const o = DB.items.find(x=>x.uid===uid);
     o.tracks = o.tracks || [];
     o.tracks.push({pos:String.fromCharCode(65+Math.floor(o.tracks.length/2))+(o.tracks.length%2+1),
-                   title:title||'Untitled', dur:'', bpm:null, key:''});
+                   title:title||'Untitled', artist:'', dur:'', bpm:null, key:'', genre:''});
     save(); renderAll(); openSheet(uid);
   };
 
