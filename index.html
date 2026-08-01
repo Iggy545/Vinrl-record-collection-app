@@ -336,6 +336,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .ed .bot{display:flex;gap:6px;margin-top:7px;align-items:center}
 .ed .bot input[type=number]{flex:0 0 74px;padding:8px;text-align:center}
 .ed .bot select{flex:1;padding:8px}
+/* Genre gets its own line rather than a fifth control on .bot — at 375px
+   the tempo row already fills the width exactly, with nothing to spare. */
+.ed .gen{margin-top:6px}
+.ed .gen input[type=text]{padding:8px;font-size:12.5px}
 .tap{flex:0 0 52px;padding:8px 0;border:1px solid var(--groove);border-radius:8px;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--dust);text-align:center}
@@ -672,7 +676,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.15';
+const APP_VERSION = '0.12.16';
 
 const mem = {};
 const store = {
@@ -1084,7 +1088,7 @@ function mkTrack(t, parentPos){
     title: t.title || 'Untitled',
     artist: (t.artists||[]).map(a => cleanName(a.name)).join(' & '), // blank = same as release
     dur: t.duration || '',
-    bpm: null, key: ''
+    bpm: null, key: '', genre: ''
   };
 }
 function flatTracks(list){
@@ -1097,7 +1101,7 @@ function flatTracks(list){
   });
   return out;
 }
-/* keep BPM and key already typed in when a tracklist is re-pulled.
+/* keep BPM, key and genre already typed in when a tracklist is re-pulled.
    Title wins over position: sub-tracks on a continuous mix all share
    the parent's position, so matching on position alone double-assigns.
    Each old track is consumed once so nothing gets copied twice. */
@@ -1108,7 +1112,7 @@ function mergeTracks(fresh, old){
   return fresh.map(t => {
     const m = take(o => norm(o.title) === norm(t.title))
            || take(o => o.pos && o.pos === t.pos);
-    return m ? Object.assign(t, {bpm: m.bpm ?? null, key: m.key || ''}) : t;
+    return m ? Object.assign(t, {bpm: m.bpm ?? null, key: m.key || '', genre: m.genre || ''}) : t;
   });
 }
 function toItem(rel, scanned){
@@ -1349,6 +1353,27 @@ function shelfCodes(){
 /* '??' covers a record whose shelf was removed — it still sorts to the
    bottom via shelfRank, and this says so rather than inventing a code. */
 const locCode = (it, codes) => (codes[it.shelf] || '??') + '-' + (it.slot || '?');
+
+/* ── every genre you have used, for the track dropdown ──────
+   Derived rather than kept in a list of its own: type one on a track
+   and it is offered on every track from then on, with nothing to keep
+   in step and nothing to prune when the last use of one goes away.
+   Seeded from the release-level genres and styles Discogs already
+   filled in, so the dropdown is worth opening before you have typed
+   anything at all. Matched case-insensitively so 'House' and 'house'
+   don't both end up in the list. */
+function genreList(){
+  const seen = new Map();
+  const add = g => {
+    const s = String(g || '').trim();
+    if(s && !seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s);
+  };
+  DB.items.forEach(it => {
+    (it.genres || []).forEach(add);
+    (it.tracks || []).forEach(t => add(t.genre));
+  });
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
 
 /* ══════════════════════════════════════════════════════════
    queue — scans resolve one at a time in the background
@@ -2658,7 +2683,8 @@ function openSheet(uid){
     <label class="f" for="sNotes">Notes</label>
     <textarea id="sNotes" rows="2" placeholder="Runout etching, sleeve creasing, who you bought it from…">${esc(it.notes)}</textarea>
 
-    <div class="eyebrow">Tracklist · BPM &amp; key</div>
+    <div class="eyebrow">Tracklist · BPM, key &amp; genre</div>
+    <datalist id="genreOpts">${genreList().map(g=>`<option value="${esc(g)}">`).join('')}</datalist>
     ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>`
       <div class="ed">
         <div class="top">
@@ -2673,6 +2699,10 @@ function openSheet(uid){
           <select class="tKey" data-i="${i}">${keyOpts(t.key||'', '— key —')}</select>
           ${t.title ? `<a class="tap" href="${esc(ytSearch(t.artist || ytArtist(it.artist), t.title))}"
              target="_blank" rel="noopener" title="Find this track on YouTube Music">Play</a>` : ''}
+        </div>
+        <div class="gen">
+          <input type="text" class="tGen" data-i="${i}" list="genreOpts"
+                 placeholder="Genre" value="${esc(t.genre || '')}">
         </div>
       </div>`).join('')
       : '<p class="hint">No tracklist on this one. Add the tracks you care about.</p>'}
@@ -2718,6 +2748,21 @@ function openSheet(uid){
     sel.onchange = e => {
       tracksOf()[+e.target.dataset.i].key = e.target.value || '';
       save(); renderAll();
+    };
+  });
+  /* Genre. Written on change rather than on every keystroke, so a
+     half-typed word never reaches the dropdown other tracks read from.
+     An existing spelling wins over a new one differing only by case, so
+     picking 'House' from the list can't quietly create 'house'. */
+  document.querySelectorAll('#sheetBody .tGen').forEach(inp => {
+    inp.onchange = e => {
+      const typed = e.target.value.trim();
+      const known = genreList().find(g => g.toLowerCase() === typed.toLowerCase());
+      const val = known || typed;
+      tracksOf()[+e.target.dataset.i].genre = val;
+      e.target.value = val;
+      save(); renderAll();
+      $('#genreOpts').innerHTML = genreList().map(g=>`<option value="${esc(g)}">`).join('');
     };
   });
 
