@@ -222,6 +222,12 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
   transition:border-color .15s ease}
 .shelfTile:hover{border-color:var(--dust)}
 .shelfTile.on{border-color:var(--sticker)}
+/* "the record you have open lives in this crate" — deliberately neither
+   the orange of .on, which means the filter is set to this shelf, nor
+   the green of a bulk-move tick. A third state needs a third look. */
+.shelfTile.here{outline:2px solid var(--card);outline-offset:2px;
+  box-shadow:0 0 20px rgba(236,230,218,.20)}
+.shelfTile.here .name{color:var(--card);font-weight:700}
 .shelfTile .art{position:relative;height:76px;border-radius:7px;overflow:hidden;
   background:var(--ink);box-shadow:inset 0 2px 12px rgba(0,0,0,.6)}
 .shelfTile .spines{display:flex;gap:2px;height:100%;padding:5px 4px}
@@ -652,7 +658,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.12';
+const APP_VERSION = '0.12.13';
 
 const mem = {};
 const store = {
@@ -2112,6 +2118,37 @@ function selItems(){
   return DB.items.filter(i => ticked.has(i.uid))
     .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b));
 }
+/* ── which crate the open record is in ──────────────────────
+   Repainted after every render for the same reason picked and ticked
+   are: the tiles are rebuilt from scratch each time, so a class set
+   once would not survive the next save. */
+let hereUid = null;
+function paintHere(){
+  document.querySelectorAll('.shelfTile.here').forEach(n => n.classList.remove('here'));
+  if(!hereUid) return;
+  const it = DB.items.find(x => x.uid === hereUid);
+  if(!it) return;
+  document.querySelectorAll('.shelfTile[data-shelf-name]').forEach(n => {
+    if(n.dataset.shelfName === it.shelf) n.classList.add('here');
+  });
+}
+/* The sheet covers the bottom of the screen, so lighting up a tile that
+   is scrolled off is no help. Only scroll when the record has actually
+   changed, or re-rendering the sheet after a grade edit would yank the
+   page about under your thumb. */
+function showHere(uid){
+  const changed = hereUid !== uid;
+  hereUid = uid;
+  paintHere();
+  if(!changed) return;
+  const tile = document.querySelector('.shelfTile.here');
+  if(!tile) return;
+  const r = tile.getBoundingClientRect();
+  if(!r.height) return;                /* Crate view isn't the one on screen */
+  if(r.top < 56 || r.bottom > window.innerHeight * 0.45)
+    tile.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
 /* The set is shared, but each surface only shows a tick where a tap would
    actually land on one: outside its own arrange mode a tap opens the
    record, so a green outline there would be a lie. */
@@ -2378,6 +2415,7 @@ function renderShelfGrid(){
       <div class="name">${esc(s)}</div>
     </div>`;
   }).join('');
+  paintHere();
 }
 
 function renderFilters(){
@@ -2489,19 +2527,17 @@ function renderAll(){ renderStrip(); renderFilters(); renderShelfGrid(); renderL
    cannot do. Position is counted from the sorted shelf rather than read
    off item.slot, so a stale number can never outlive the order it
    describes. */
-function openLocator(uid){
-  const it = DB.items.find(x => x.uid === uid); if(!it) return;
+/* Shared by the locator popup and the record sheet, so the two can never
+   drift apart about where a record actually sits. */
+function locatorHtml(it){
   const on = DB.items.filter(x => x.shelf === it.shelf).sort(bySlot);
   const n = on.length;
-  const pos = Math.max(1, on.findIndex(x => x.uid === uid) + 1);
+  const pos = Math.max(1, on.findIndex(x => x.uid === it.uid) + 1);
   const pct = n ? ((pos - 0.5) / n) * 100 : 50;
   const prev = on[pos - 2], next = on[pos];
   const gone = !DB.shelves.includes(it.shelf);
   const who = q => esc(q.artist) + ' — ' + esc(q.title);
-  $('#sheetBody').innerHTML = `
-    <div class="eyebrow" style="margin-top:4px">Where to find it</div>
-    <h3 style="margin:0 0 2px;font-size:18px;line-height:1.25">${esc(it.title)}</h3>
-    <div class="meta">${esc(it.artist)}</div>
+  return `
     <div class="chips">
       <span class="chip" style="color:var(--sticker);border-color:var(--sticker)">${esc(locCode(it, shelfCodes()))}</span>
       <span class="chip">${esc(it.shelf || 'no shelf')}${gone ? ' · missing' : ''}</span>
@@ -2512,13 +2548,23 @@ function openLocator(uid){
       ${prev ? `filed after &nbsp;<b>${who(prev)}</b>` : 'Right at the <b>front</b> of the crate.'}
       ${prev && next ? '<br>and before &nbsp;' : next ? '<br>just before &nbsp;' : ''}${next ? `<b>${who(next)}</b>` : ''}
       ${prev && !next ? '<br>Right at the <b>back</b> of the crate.' : ''}
-    </p>
+    </p>`;
+}
+
+function openLocator(uid){
+  const it = DB.items.find(x => x.uid === uid); if(!it) return;
+  $('#sheetBody').innerHTML = `
+    <div class="eyebrow" style="margin-top:4px">Where to find it</div>
+    <h3 style="margin:0 0 2px;font-size:18px;line-height:1.25">${esc(it.title)}</h3>
+    <div class="meta">${esc(it.artist)}</div>
+    ${locatorHtml(it)}
     <p class="hint">Counted from the front. If the crate has drifted, go by the two
       records either side rather than the number.</p>
     <div class="row" style="margin-top:14px">
       <button class="btn quiet" id="locOpen">Open the record</button>
     </div>`;
   $('#locOpen').onclick = () => openSheet(uid);
+  showHere(uid);
   $('#scrim').classList.add('on');
   $('#sheet').classList.add('on');
 }
@@ -2528,6 +2574,7 @@ let openUid = null;
 function openSheet(uid){
   const it = DB.items.find(x => x.uid === uid); if(!it) return;
   openUid = uid;
+  showHere(uid);            /* light up the crate this one lives in */
   const v = itemValue(it);
   $('#sheetBody').innerHTML = `
     <div class="sheet-head">
@@ -2565,6 +2612,9 @@ function openSheet(uid){
     </div>
     ${it.paid!=null && v!=null ? `<p class="hint" style="color:${v>=it.paid?'var(--ok)':'var(--bad)'}">
        ${v>=it.paid?'Up':'Down'} ${money(Math.abs(v-it.paid))} on what you paid.</p>`:''}
+
+    <div class="eyebrow" style="margin:20px 0 8px">Where it is</div>
+    ${locatorHtml(it)}
 
     <label class="f" for="sNotes">Notes</label>
     <textarea id="sNotes" rows="2" placeholder="Runout etching, sleeve creasing, who you bought it from…">${esc(it.notes)}</textarea>
@@ -2605,11 +2655,14 @@ function openSheet(uid){
   $('#sMedia').onchange = e => { patch('media', e.target.value); openSheet(uid); };
   $('#sSleeve').onchange = e => { patch('sleeve', e.target.value); openSheet(uid); };
   $('#sShelf').onchange = e => {
-    /* moving shelf puts it at the end of the new one, not at whatever
-       slot number it happened to hold on the old shelf */
+    /* Routed through moveToShelf rather than writing the field here.
+       Setting it inline left a hole in the shelf you moved off — it was
+       never renumbered — and skipped the undo step every other way of
+       moving a record gets. It also puts the record at the end of the
+       new shelf rather than at whatever slot it held on the old one. */
     const o = DB.items.find(x => x.uid === uid);
-    if(o) o.slot = nextSlot(e.target.value);
-    patch('shelf', e.target.value);
+    if(moveToShelf(o, e.target.value)){ save(); renderAll(); }
+    openSheet(uid);         /* "Where it is" is now stale — redraw it */
   };
   $('#sPaid').onchange = e => { patch('paid', e.target.value===''?null:parseFloat(e.target.value)); openSheet(uid); };
   $('#sNotes').oninput = e => patch('notes', e.target.value);
@@ -2762,7 +2815,10 @@ function reviewLookups(uid, found){
   };
 }
 
-function closeSheet(){ openUid=null; $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on'); }
+function closeSheet(){
+  openUid=null; hereUid=null; paintHere();
+  $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on');
+}
 
 /* ══════════════════════════════════════════════════════════
    CSV — matches the Discogs export layout both ways
