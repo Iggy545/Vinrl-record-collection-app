@@ -684,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.19';
+const APP_VERSION = '0.12.20';
 
 const mem = {};
 const store = {
@@ -1167,6 +1167,13 @@ function toItem(rel, scanned){
     priced: Date.now()
   };
 }
+
+/* The sane range for a typed tempo. Declared once so the input's own
+   min/max and the code that enforces them can't drift apart — the
+   attributes alone are only a browser hint and stopped nothing, so a
+   slipped digit (1288 for 128) went straight into the record and then
+   skewed relBpm(), which averages every track on it. */
+const BPM_MIN = 40, BPM_MAX = 300;
 
 /* Goldmine condition multipliers, applied to the Discogs low */
 const COND = {'M':1.35,'NM':1.20,'VG+':1.00,'VG':0.62,'G+':0.35,'G':0.22,'F':0.12,'P':0.06};
@@ -2761,7 +2768,7 @@ function openSheet(uid){
         </div>
         <div class="bot">
           <input type="number" class="tBpm" data-i="${i}" value="${t.bpm||''}"
-                 placeholder="BPM" min="40" max="300" step="0.1" inputmode="decimal">
+                 placeholder="BPM" min="${BPM_MIN}" max="${BPM_MAX}" step="0.1" inputmode="decimal">
           <button class="tap" data-i="${i}">Tap</button>
           <select class="tKey" data-i="${i}">${keyOpts(t.key||'', '— key —')}</select>
           ${t.title ? `<a class="tap" href="${esc(ytSearch(t.artist || ytArtist(it.artist), t.title))}"
@@ -2809,8 +2816,18 @@ function openSheet(uid){
   const tracksOf = () => DB.items.find(x=>x.uid===uid).tracks;
   document.querySelectorAll('#sheetBody .tBpm').forEach(inp => {
     inp.onchange = e => {
-      const v = parseFloat(e.target.value);
-      tracksOf()[+e.target.dataset.i].bpm = (v>0 ? Math.round(v*10)/10 : null);
+      const t = tracksOf()[+e.target.dataset.i];
+      const raw = e.target.value.trim();
+      if(raw === ''){ t.bpm = null; save(); renderAll(); return; }   /* clearing is fine */
+      const v = parseFloat(raw);
+      /* Refused rather than clamped: 1288 was meant to be 128, not 300,
+         so pinning it to the ceiling would hide the typo instead of
+         showing it. The old value goes back in the box. */
+      if(!(v >= BPM_MIN && v <= BPM_MAX)){
+        e.target.value = t.bpm ?? '';
+        return toast(`BPM should be between ${BPM_MIN} and ${BPM_MAX} — left as it was`, 3800);
+      }
+      t.bpm = Math.round(v*10)/10;
       save(); renderAll();
     };
   });
@@ -2848,6 +2865,10 @@ function openSheet(uid){
       const gaps = taps.slice(1).map((t,j) => t - taps[j]);
       const bpm = Math.round(60000 / (gaps.reduce((a,c)=>a+c,0)/gaps.length) * 10)/10;
       btn.textContent = bpm;
+      /* Tapping writes straight to the track rather than through the
+         input's change handler, so it needs the same range check or a
+         flurry of fast taps lands a number the box would have refused. */
+      if(!(bpm >= BPM_MIN && bpm <= BPM_MAX)) return;
       const inp = document.querySelector(`#sheetBody .tBpm[data-i="${btn.dataset.i}"]`);
       inp.value = bpm;
       tracksOf()[+btn.dataset.i].bpm = bpm; save();
@@ -3427,11 +3448,16 @@ $('#btnJson').onclick = () => {
 $('#btnDj').onclick = () => {
   const rows = allTracks();
   if(!rows.length) return toast('No tracklists to export yet');
-  const head = ['Pos','Track','Artist','Release','BPM','Camelot','Key','Label','Catalog#','Year','Shelf'];
+  const head = ['Pos','Track','Artist','Release','BPM','Camelot','Key','Genre',
+                'Label','Catalog#','Year','Shelf'];
   const body = rows
     .sort((a,b)=> keyRank(a.t.key)-keyRank(b.t.key) || (a.t.bpm||1e9)-(b.t.bpm||1e9))
+    /* A track with no genre typed falls back to the release's own, the
+       same way the genre filter treats it — otherwise most of the sheet
+       reads blank until every track has been gone through by hand. */
     .map(({t,it}) => [t.pos, t.title, t.artist || it.artist, it.title, t.bpm??'', t.key||'',
-                      t.key?KEYNAME[t.key]:'', it.label, it.catno, it.year, it.shelf]
+                      t.key?KEYNAME[t.key]:'', t.genre || (it.genres||[])[0] || '',
+                      it.label, it.catno, it.year, it.shelf]
                      .map(cell).join(','));
   download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
 };
