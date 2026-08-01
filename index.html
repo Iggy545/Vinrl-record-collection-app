@@ -684,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.20';
+const APP_VERSION = '0.12.21';
 
 const mem = {};
 const store = {
@@ -779,7 +779,10 @@ var Sync = (function(){
   function setStatus(text, kind){
     const el = $('#syncState');
     if(!el) return;
-    el.textContent = connected ? ('Synced — ' + text) : text;
+    /* An error is never dressed up as "Synced — …". That prefix applied
+       to every message while connected, which is a large part of why a
+       failed upload looked exactly like a healthy one. */
+    el.textContent = (connected && kind !== 'err') ? ('Synced — ' + text) : text;
     el.style.color = kind==='err' ? 'var(--bad)' : (kind==='ok' ? 'var(--ok)' : 'var(--dust)');
   }
 
@@ -830,6 +833,27 @@ var Sync = (function(){
   }
 
   /* ── outgoing: diff against the shadow copy ───────────── */
+  /* Writes are still fired without waiting — blocking a save on the
+     network would make the app feel broken offline, and Firestore's own
+     persistence queues and replays them. But a REJECTED write (rules,
+     expired login, quota) must not leave the shadow claiming success:
+     the shadow is what the next diff compares against, so a record
+     marked as sent and then lost was never offered again, while the
+     status line went on reading "Synced". */
+  const guard = (p, fn) => { if(p && typeof p.catch === 'function') p.catch(fn); };
+
+  /* Put the shadow and the timestamp back exactly as they were, so the
+     next save — or Sync now — offers this record again. The timestamp
+     matters as much as the shadow: left at the failed write's time it
+     would out-rank a genuine remote update and reject it. */
+  function writeFailed(uid, prevShadow, prevTs, err){
+    if(prevShadow === undefined) delete shadow[uid]; else shadow[uid] = prevShadow;
+    if(prevTs === undefined) delete times.records[uid]; else times.records[uid] = prevTs;
+    saveTimes();
+    setStatus('some changes have not uploaded — tap Sync now to try again', 'err');
+    try{ console.warn('Crate sync: upload failed for', uid, err); }catch(e){}
+  }
+
   function pushRecords(){
     if(!connected) return;
     const cur = {};
@@ -838,14 +862,18 @@ var Sync = (function(){
     Object.keys(cur).forEach(uid => {
       const s = ser(cur[uid]);
       if(shadow[uid] !== s){
+        const prevShadow = shadow[uid], prevTs = times.records[uid];
         const ts = Date.now(); times.records[uid] = ts; shadow[uid] = s; n++;
-        recCol.doc(docSafe(uid)).set({data: clean(cur[uid]), updatedAt: ts, by: clientId, deleted:false, key: uid});
+        guard(recCol.doc(docSafe(uid)).set({data: clean(cur[uid]), updatedAt: ts, by: clientId, deleted:false, key: uid}),
+              err => writeFailed(uid, prevShadow, prevTs, err));
       }
     });
     Object.keys(shadow).forEach(uid => {
       if(!(uid in cur)){
+        const prevShadow = shadow[uid], prevTs = times.records[uid];
         const ts = Date.now(); times.records[uid] = ts; delete shadow[uid]; n++;
-        recCol.doc(docSafe(uid)).set({updatedAt: ts, by: clientId, deleted:true, key: uid});
+        guard(recCol.doc(docSafe(uid)).set({updatedAt: ts, by: clientId, deleted:true, key: uid}),
+              err => writeFailed(uid, prevShadow, prevTs, err));
       }
     });
     if(n) saveTimes();
@@ -854,9 +882,15 @@ var Sync = (function(){
     if(!connected) return;
     const sig = ser({s: DB.shelves, c: DB.curr});
     if(sig === metaShadow) return;
+    const prevShadow = metaShadow, prevTs = times.meta;   /* same trap as pushRecords */
     metaShadow = sig;
     const ts = Date.now(); times.meta = ts; saveTimes();
-    metaDoc.set({shelves: clean(DB.shelves), curr: DB.curr, updatedAt: ts, by: clientId});
+    guard(metaDoc.set({shelves: clean(DB.shelves), curr: DB.curr, updatedAt: ts, by: clientId}),
+      err => {
+        metaShadow = prevShadow; times.meta = prevTs; saveTimes();
+        setStatus('your shelf list has not uploaded — tap Sync now to try again', 'err');
+        try{ console.warn('Crate sync: shelf list upload failed', err); }catch(e){}
+      });
   }
 
   /* the debounced save() calls this on every local change */
