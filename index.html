@@ -502,6 +502,7 @@ nav button.on{color:var(--sticker)}
       <option value="year">Year</option>
       <option value="value">Value high–low</option>
       <option value="label">Label</option>
+      <option value="genre">Genre A–Z</option>
       <option value="bpm">BPM low–high</option>
       <option value="keybpm">Key, then BPM</option>
       <option value="bpmkey">BPM, then key</option>
@@ -690,7 +691,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.24';
+const APP_VERSION = '0.12.25';
 
 const mem = {};
 const store = {
@@ -1398,6 +1399,16 @@ function relBpm(it){
 function relKey(it){
   const k = (it.tracks||[]).map(t=>t.key).filter(Boolean);
   return k.length ? k[0] : '';
+}
+/* A track's genre, falling back to the release's own Discogs genre —
+   the same rule the filter and the DJ sheet use, so a track nobody has
+   typed up yet still sorts and exports under something sensible. */
+const trackGenre = (t, it) => (t && t.genre) || ((it && it.genres) || [])[0] || '';
+/* A release's genre for sorting: the first one actually typed on a
+   track, else what Discogs called the record. */
+function relGenre(it){
+  const g = (it.tracks||[]).map(t => t.genre).filter(Boolean);
+  return g.length ? g[0] : (((it.genres)||[])[0] || '');
 }
 
 /* ── where a record lives, in short ─────────────────────────
@@ -2479,6 +2490,17 @@ function visible(){
     year:(a,b)=> (b.year||0) - (a.year||0),
     value:(a,b)=> (itemValue(b)??-1) - (itemValue(a)??-1),
     label:(a,b)=> (a.label||'~').localeCompare(b.label||'~'),
+    /* Blanks are pushed to the end explicitly rather than with a '~'
+       sentinel: localeCompare puts punctuation BEFORE letters, so '~'
+       sorts a record with no genre to the top, which is the opposite of
+       what it looks like it is doing. Artist is coerced too — a CSV
+       import can arrive without one, and undefined.localeCompare throws
+       inside a comparator. */
+    genre:(a,b)=>{
+      const ga = relGenre(a), gb = relGenre(b);
+      if(!ga !== !gb) return ga ? -1 : 1;
+      return ga.localeCompare(gb) || String(a.artist||'').localeCompare(String(b.artist||''));
+    },
     bpm:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9),
     keybpm:(a,b)=> keyRank(relKey(a)) - keyRank(relKey(b)) || (relBpm(a)??1e9) - (relBpm(b)??1e9),
     bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b))
@@ -2505,6 +2527,15 @@ function visibleTracks(){
     year:(a,b)=> (b.it.year||0) - (a.it.year||0),
     value:(a,b)=> (itemValue(b.it)??-1) - (itemValue(a.it)??-1),
     label:(a,b)=> (a.it.label||'~').localeCompare(b.it.label||'~'),
+    /* The track's own genre here, not the record's — the track list is
+       the surface where one side being Dub and the other Disco matters.
+       Blanks last, for the same localeCompare reason as the sleeve view. */
+    genre:(a,b)=>{
+      const ga = trackGenre(a.t,a.it), gb = trackGenre(b.t,b.it);
+      if(!ga !== !gb) return ga ? -1 : 1;
+      return ga.localeCompare(gb)
+             || String(a.it.artist||'').localeCompare(String(b.it.artist||'')) || a.i - b.i;
+    },
     bpm:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9),
     keybpm:(a,b)=> keyRank(a.t.key) - keyRank(b.t.key) || (a.t.bpm||1e9) - (b.t.bpm||1e9),
     bpmkey:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9) || keyRank(a.t.key) - keyRank(b.t.key)
@@ -3553,7 +3584,7 @@ $('#btnDj').onclick = () => {
        same way the genre filter treats it — otherwise most of the sheet
        reads blank until every track has been gone through by hand. */
     .map(({t,it}) => [t.pos, t.title, t.artist || it.artist, it.title, t.bpm??'', t.key||'',
-                      t.key?KEYNAME[t.key]:'', t.genre || (it.genres||[])[0] || '',
+                      t.key?KEYNAME[t.key]:'', trackGenre(t, it),
                       it.label, it.catno, it.year, it.shelf]
                      .map(cell).join(','));
   download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
