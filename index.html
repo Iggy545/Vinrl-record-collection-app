@@ -60,6 +60,12 @@ header{
 @keyframes spin{to{transform:rotate(360deg)}}
 .wordmark{font-weight:700;letter-spacing:.22em;text-transform:uppercase;font-size:15px}
 .wordmark span{color:var(--dust);letter-spacing:.1em;font-weight:400}
+/* The running version, in the bar rather than only at the foot of Setup.
+   A cached page looks identical to a fresh one, so this is the first
+   thing worth reading when something behaves oddly. Mono and small so it
+   sits under the wordmark's tracking rather than competing with it. */
+.wordmark .ver{font-family:var(--mono);font-size:10px;letter-spacing:.04em;
+  text-transform:none;color:var(--dust);font-weight:400;white-space:nowrap}
 header .spacer{flex:1}
 .ghost{font-family:var(--mono);font-size:11px;color:var(--dust);
   border:1px solid var(--groove);padding:6px 10px;border-radius:99px}
@@ -405,7 +411,7 @@ nav button.on{color:var(--sticker)}
 
 <header>
   <div class="disc" id="disc" aria-hidden="true"></div>
-  <div class="wordmark">Crate <span>/ vinyl</span></div>
+  <div class="wordmark">Crate <span>/ vinyl</span> <span class="ver" id="hdrVer"></span></div>
   <div class="spacer"></div>
   <button class="ghost" id="btnHelp">help</button>
 </header>
@@ -684,7 +690,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.22';
+const APP_VERSION = '0.12.23';
 
 const mem = {};
 const store = {
@@ -3936,6 +3942,7 @@ document.addEventListener('visibilitychange', () => { if(document.hidden) stopCa
   await load();
   renderAll(); renderQueue();
   $('#appVer').textContent = APP_VERSION;
+  $('#hdrVer').textContent = 'v' + APP_VERSION;
   fillSyncForm();
   /* Firebase keeps the sign-in from last time, so reconnect quietly.
      If it needs a password the panel says so rather than nagging. */
