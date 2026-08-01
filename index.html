@@ -126,8 +126,11 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 
 /* ── THE CRATE (signature) ────────────────────────────────── */
 .crate-rail{position:relative;margin:0 -16px;padding:0 16px}
+/* The top padding is headroom, not decoration: overflow-x:auto makes the
+   vertical axis clip too, so a record lifted out of the crate is cut off
+   without room above it to rise into. */
 .crate{display:flex;gap:3px;overflow-x:auto;scroll-snap-type:x proximity;
-  padding:22px 16px 26px;margin:0 -16px;
+  padding:60px 16px 26px;margin:0 -16px;
   background:
     linear-gradient(180deg,transparent 0 18px,#0d0a11 18px 100%);
   border-top:1px solid var(--groove);border-bottom:1px solid var(--groove)}
@@ -171,6 +174,17 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 /* lifted out of the crate, waiting to be put somewhere */
 .spine.picked{animation:none;transform:translateY(-20px);z-index:6;
   outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
+/* Pulled half out of the crate so you can see what it actually is. A
+   26px sliver of a sleeve is unreadable, so it widens as it rises —
+   which is what the width transition on .spine was always for. Cream,
+   like the shelf tile, since orange already means lifted for a move and
+   green means ticked for a bulk one. */
+.spine.here{transform:translateY(-38px);width:86px;z-index:7;
+  outline:2px solid var(--card);outline-offset:1px;box-shadow:var(--shadow)}
+.spine .pop{position:absolute;left:0;top:0;width:100%;height:86px;
+  object-fit:cover;display:block}
+.spine .txt{transition:opacity .18s ease}
+.spine.here.hasart .txt{opacity:0}
 .rec.picked{animation:none}
 .rec.picked .sleeve{outline:2px solid var(--sticker);outline-offset:3px}
 .rec.picked h4{color:var(--sticker)}
@@ -658,7 +672,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.14';
+const APP_VERSION = '0.12.15';
 
 const mem = {};
 const store = {
@@ -2132,13 +2146,26 @@ function selItems(){
    once would not survive the next save. */
 let hereUid = null;
 function paintHere(){
-  document.querySelectorAll('.shelfTile.here').forEach(n => n.classList.remove('here'));
+  document.querySelectorAll('.here').forEach(n => n.classList.remove('here','hasart'));
+  document.querySelectorAll('#crate .pop').forEach(n => n.remove());
   if(!hereUid) return;
   const it = DB.items.find(x => x.uid === hereUid);
   if(!it) return;
   document.querySelectorAll('.shelfTile[data-shelf-name]').forEach(n => {
     if(n.dataset.shelfName === it.shelf) n.classList.add('here');
   });
+  /* The sleeve is hung on the one spine that needs it rather than
+     rendered into all 150 the rail can hold — one image, not a crate
+     full of them. Removed again above whenever the record changes. */
+  const sp = document.querySelector('#crate .spine[data-uid="' + CSS.escape(hereUid) + '"]');
+  if(!sp) return;
+  sp.classList.add('here');
+  if(it.art){
+    const img = document.createElement('img');
+    img.className = 'pop'; img.alt = ''; img.src = it.art;
+    sp.appendChild(img);
+    sp.classList.add('hasart');
+  }
 }
 /* The sheet covers the bottom of the screen, so lighting up a tile that
    is scrolled off is no help. Only scroll when the record has actually
@@ -2149,6 +2176,10 @@ function showHere(uid){
   hereUid = uid;
   paintHere();
   if(!changed) return;
+  /* Bring the popped record into the rail's view. block:'nearest' so
+     scrolling the rail sideways doesn't also jerk the page up or down. */
+  const sp = document.querySelector('#crate .spine.here');
+  if(sp) sp.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});
   const tile = document.querySelector('.shelfTile.here');
   if(!tile) return;
   const r = tile.getBoundingClientRect();
