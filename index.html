@@ -206,6 +206,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .tools{display:flex;gap:8px;margin:14px 0}
 .tools input{flex:2}
 .tools select{flex:1;padding:12px 8px}
+.tools #sortDir{flex:0 0 42px;padding:0;font-size:15px;line-height:1}
+.tools #sortDir[aria-pressed="true"]{color:var(--sticker);border-color:var(--sticker)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:14px;margin-bottom:24px}
 .rec{position:relative;text-align:left}
 .sleeve{aspect-ratio:1;background:var(--wax);border:1px solid var(--groove);
@@ -498,6 +500,8 @@ nav button.on{color:var(--sticker)}
       <option value="keybpm">Key, then BPM</option>
       <option value="bpmkey">BPM, then key</option>
     </select>
+    <button class="ghost" id="sortDir" aria-pressed="false"
+            title="Reverse the order">↓</button>
   </div>
 
   <div class="filterbar">
@@ -505,6 +509,10 @@ nav button.on{color:var(--sticker)}
       <span class="tag">Shelf</span>
       <select id="shelfFilter"><option value="">All shelves</option></select>
       <select id="fmtFilter"><option value="">All formats</option></select>
+    </div>
+    <div class="lane">
+      <span class="tag">Genre</span>
+      <select id="genreFilter" style="flex:1"><option value="">All genres</option></select>
     </div>
     <div class="lane">
       <span class="tag">BPM</span>
@@ -676,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.16';
+const APP_VERSION = '0.12.17';
 
 const mem = {};
 const store = {
@@ -1900,8 +1908,35 @@ function filters(){
     lo: parseFloat($('#bpmMin').value) || null,
     hi: parseFloat($('#bpmMax').value) || null,
     keys: kf ? ($('#harmonic').checked ? compatible(kf) : [kf]) : null,
-    sort: $('#sort').value
+    genre: $('#genreFilter') ? $('#genreFilter').value : '',
+    sort: $('#sort').value,
+    desc: isDesc()
   };
+}
+/* One toggle rather than a reversed twin of every option: nine sorts
+   would have become eighteen in a dropdown you already have to scroll,
+   and each new sort would need remembering twice. */
+const isDesc = () => {
+  const b = $('#sortDir');
+  return !!b && b.getAttribute('aria-pressed') === 'true';
+};
+/* A record answers to a genre if its own Discogs genres carry it or any
+   of its tracks does, so the filter is useful before every track has
+   been typed up. */
+function genreOk(it, f){
+  if(!f.genre) return true;
+  const g = f.genre.toLowerCase();
+  return (it.genres || []).some(x => String(x).toLowerCase() === g)
+      || (it.tracks || []).some(t => String(t.genre || '').toLowerCase() === g);
+}
+/* In the track list the question is narrower — this track, not its
+   record. A track with nothing typed falls back to the release's
+   genres, so untyped tracks still turn up under the right heading. */
+function trackGenreOk(t, it, f){
+  if(!f.genre) return true;
+  const g = f.genre.toLowerCase();
+  if(t.genre) return String(t.genre).toLowerCase() === g;
+  return (it.genres || []).some(x => String(x).toLowerCase() === g);
 }
 const bpmOk = (t,f) => !(f.lo || f.hi) ? true
   : (t.bpm > 0 && (!f.lo || t.bpm >= f.lo) && (!f.hi || t.bpm <= f.hi));
@@ -1909,7 +1944,9 @@ const keyOk = (t,f) => !f.keys ? true : f.keys.includes(t.key);
 function relOk(it,f){
   if(f.shelf && it.shelf !== f.shelf) return false;
   if(f.fmt && !(it.format||'').toLowerCase().includes(f.fmt.toLowerCase())) return false;
-  if(f.q && ![it.artist,it.title,it.label,it.catno,it.barcode,(it.genres||[]).join(' ')]
+  if(!genreOk(it,f)) return false;
+  if(f.q && ![it.artist,it.title,it.label,it.catno,it.barcode,(it.genres||[]).join(' '),
+              (it.tracks||[]).map(t=>t.genre).join(' ')]
        .join(' ').toLowerCase().includes(f.q)) return false;
   return true;
 }
@@ -2362,7 +2399,9 @@ function visible(){
     keybpm:(a,b)=> keyRank(relKey(a)) - keyRank(relKey(b)) || (relBpm(a)??1e9) - (relBpm(b)??1e9),
     bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b))
   }[f.sort];
-  return list.sort(cmp);
+  /* Negating the chosen comparator rather than writing a reversed twin of
+     each one: a new sort added later gets its opposite for nothing. */
+  return list.sort(f.desc ? (a,b) => -cmp(a,b) : cmp);
 }
 
 /* track view — the flat list a DJ actually reads */
@@ -2373,7 +2412,7 @@ function visibleTracks(){
       if(!f.q) return false;
       if(!`${t.title} ${t.artist}`.toLowerCase().includes(f.q)) return false;
     }
-    return bpmOk(t,f) && keyOk(t,f);
+    return bpmOk(t,f) && keyOk(t,f) && trackGenreOk(t,it,f);
   });
   const cmp = {
     shelf:(a,b)=> shelfRank(a.it.shelf) - shelfRank(b.it.shelf) || bySlot(a.it,b.it) || a.i - b.i,
@@ -2386,7 +2425,7 @@ function visibleTracks(){
     keybpm:(a,b)=> keyRank(a.t.key) - keyRank(b.t.key) || (a.t.bpm||1e9) - (b.t.bpm||1e9),
     bpmkey:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9) || keyRank(a.t.key) - keyRank(b.t.key)
   }[f.sort];
-  return {rows: rows.sort(cmp), sort: f.sort};
+  return {rows: rows.sort(f.desc ? (a,b) => -cmp(a,b) : cmp), sort: f.sort};
 }
 
 function renderTracks(){
@@ -2490,6 +2529,15 @@ function renderFilters(){
   const ff = $('#fmtFilter'), keepF = ff.value;
   ff.innerHTML = '<option value="">All formats</option>' + fmts.map(f=>`<option>${esc(f)}</option>`).join('');
   ff.value = keepF;
+  /* Same derived list the track dropdown reads, so filtering can only
+     ever offer a genre something is actually filed under. */
+  const gf = $('#genreFilter');
+  if(gf){
+    const keepG = gf.value;
+    gf.innerHTML = '<option value="">All genres</option>' +
+      genreList().map(g=>`<option>${esc(g)}</option>`).join('');
+    gf.value = keepG;
+  }
   const kf = $('#keyFilter'), keepK = kf.value, tally = {};
   allTracks().forEach(({t}) => { if(t.key) tally[t.key] = (tally[t.key]||0)+1; });
   kf.innerHTML = '<option value="">Any key</option>' + CAMELOT.map(k =>
@@ -2544,7 +2592,10 @@ let recEdit = false;
 function updateArrangeBar(){
   const bar = $('#arrangeBar');
   if(!bar) return;
-  const usable = MODE === 'sleeves' && $('#sort').value === 'shelf';
+  /* Reversed counts as a different sort here. renumberFromDom writes new
+     slots straight from the on-screen order, so arranging a back-to-front
+     grid would quietly turn the whole shelf round. */
+  const usable = MODE === 'sleeves' && $('#sort').value === 'shelf' && !isDesc();
   bar.style.display = usable ? '' : 'none';
   const shelf = $('#shelfFilter').value;
   /* Sorting by anything else drops you out of arranging. Selecting goes
@@ -2710,6 +2761,9 @@ function openSheet(uid){
       <button class="btn quiet" id="sAddTrack">Add a track</button>
       <button class="btn quiet" id="sLookup">Find tempo &amp; key</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn quiet" id="sGenreAll">Set genre for every track</button>
+    </div>
 
     <div class="row" style="margin-top:18px">
       <button class="btn quiet" id="sRefresh">Refresh from Discogs</button>
@@ -2800,6 +2854,26 @@ function openSheet(uid){
     }
     spin(false);
     reviewLookups(uid, found);
+  };
+
+  /* Most records are one genre the whole way through, so typing it into
+     twelve boxes is busywork. Seeded from whatever is already there —
+     a track you have typed, else the release's own Discogs genre — and
+     an empty answer clears the lot, which is the only way back. */
+  $('#sGenreAll').onclick = () => {
+    const o = DB.items.find(x => x.uid === uid);
+    const tks = o.tracks || [];
+    if(!tks.length) return toast('No tracks on this one yet');
+    const seed = (tks.find(t => t.genre) || {}).genre || (o.genres || [])[0] || '';
+    const typed = prompt('Genre for all ' + tks.length +
+      (tks.length === 1 ? ' track' : ' tracks') + ' on this record:', seed);
+    if(typed === null) return;
+    const v = typed.trim();
+    const known = genreList().find(g => g.toLowerCase() === v.toLowerCase());
+    const val = known || v;
+    tks.forEach(t => t.genre = val);
+    save(); renderAll(); openSheet(uid);
+    toast(val ? 'All ' + tks.length + ' set to ' + val : 'Genre cleared on every track', 3200);
   };
 
   $('#sAddTrack').onclick = () => {
@@ -3171,10 +3245,22 @@ $('#btnBlank').onclick = () => {
   save(); renderAll(); toast('Added to ' + it.shelf + ', position ' + it.slot);
 };
 
-['#q','#sort','#shelfFilter','#fmtFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic'].forEach(s => {
-  $(s).addEventListener('input', renderList);
-  $(s).addEventListener('change', renderList);
-});
+['#q','#sort','#shelfFilter','#fmtFilter','#genreFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic']
+  .forEach(s => {
+    $(s).addEventListener('input', renderList);
+    $(s).addEventListener('change', renderList);
+  });
+
+/* The arrow points the way the list runs, and the title says what a tap
+   will do — an unlabelled arrow on its own is a coin toss. */
+$('#sortDir').onclick = e => {
+  const b = e.currentTarget;
+  const on = b.getAttribute('aria-pressed') !== 'true';
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = on ? '↑' : '↓';
+  b.title = on ? 'Reversed — tap for normal order' : 'Reverse the order';
+  renderList();
+};
 
 document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
   MODE = b.dataset.m;
@@ -3184,8 +3270,12 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
 
 $('#clearF').onclick = () => {
   ['#q','#bpmMin','#bpmMax'].forEach(s => $(s).value = '');
-  ['#shelfFilter','#fmtFilter','#keyFilter'].forEach(s => $(s).value = '');
+  ['#shelfFilter','#fmtFilter','#genreFilter','#keyFilter'].forEach(s => $(s).value = '');
   $('#harmonic').checked = false;
+  /* the direction is a filter too — leaving it reversed after "clear"
+     is exactly the sort of thing that reads as a bug */
+  const d = $('#sortDir');
+  d.setAttribute('aria-pressed','false'); d.textContent = '↓'; d.title = 'Reverse the order';
   renderList();
 };
 
