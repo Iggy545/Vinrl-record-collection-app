@@ -290,6 +290,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .trow .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow .num{display:flex;align-items:center;gap:7px;flex:none}
+/* the shelf code leads the line so it survives the ellipsis — it is the
+   thing you are scanning for when you want to go and pull the record */
+.trow .loc{font-style:normal;font-weight:700;color:var(--sticker)}
+
+/* ── where a record physically sits on its shelf ───────────── */
+.ruler{position:relative;height:28px;border-radius:6px;background:var(--ink);
+  border:1px solid var(--groove);overflow:hidden;margin:12px 0 8px}
+.ruler i{position:absolute;top:0;bottom:0;width:3px;background:var(--sticker);
+  box-shadow:0 0 10px var(--sticker)}
+.ruler b{position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--dust)}
+.neigh{font-family:var(--mono);font-size:11.5px;color:var(--dust);line-height:1.75}
+.neigh b{color:var(--card);font-weight:400}
 .keyhead{display:flex;align-items:baseline;gap:8px;margin:20px 0 2px}
 .keyhead b{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--sticker)}
 .keyhead span{font-family:var(--mono);font-size:10.5px;color:var(--dust)}
@@ -639,7 +652,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.11';
+const APP_VERSION = '0.12.12';
 
 const mem = {};
 const store = {
@@ -1291,6 +1304,31 @@ function relKey(it){
   const k = (it.tracks||[]).map(t=>t.key).filter(Boolean);
   return k.length ? k[0] : '';
 }
+
+/* ── where a record lives, in short ─────────────────────────
+   A shelf's code is derived from its name every time it is drawn and
+   never stored, so a rename can't leave a stale code behind and shelves
+   stay plain strings — giving them a second field would mean rewriting
+   shelfRank, the tiles, the filter, add/rename/remove, fileTo, CSV
+   import, backup and the sync meta doc.
+   Initials for several words, first two letters for one: 'Record box'
+   → RB, 'Soul & Funk' → SF, 'House' → HO. Two shelves that reduce to
+   the same code get the later one's position appended. */
+function shelfCodes(){
+  const out = {}, seen = {};
+  DB.shelves.forEach((s, i) => {
+    const w = String(s).split(/[^A-Za-z0-9]+/).filter(Boolean);
+    let c = (w.length > 1 ? w.map(x => x[0]).join('') : (w[0] || 'S').slice(0,2))
+              .toUpperCase().slice(0,3);
+    if(seen[c]) c += (i + 1);
+    seen[c] = 1;
+    out[s] = c;
+  });
+  return out;
+}
+/* '??' covers a record whose shelf was removed — it still sorts to the
+   bottom via shelfRank, and this says so rather than inventing a code. */
+const locCode = (it, codes) => (codes[it.shelf] || '??') + '-' + (it.slot || '?');
 
 /* ══════════════════════════════════════════════════════════
    queue — scans resolve one at a time in the background
@@ -1984,6 +2022,36 @@ function undoLast(){
   toast(n ? 'Put back — ' + n + (n === 1 ? ' record' : ' records') : 'Nothing to put back', 3000);
 }
 
+/* ── file a whole shelf into tempo order ────────────────────
+   Average BPM across the record's tracks, not the fastest or the first:
+   a 12" with a 118 side and a 124 side belongs between them rather than
+   at either end. Ties break on key, so records that would mix together
+   end up next to each other. Anything with no BPM at all goes to the
+   back — those are the ones still to be measured, and burying them in
+   the middle would hide the work left to do.
+
+   The snapshot is taken here, inside the mover, for the same reason the
+   other five do it: undo covers a new way of moving records for free and
+   no call site can forget. Pushed after the mutation, so a shelf too
+   small to sort leaves no dead step on the stack. */
+function sortShelfByTempo(name){
+  const on = DB.items.filter(x => x.shelf === name);
+  if(on.length < 2) return 0;
+  const before = placement();
+  on.sort((a, b) => {
+    const ba = relBpm(a), bb = relBpm(b);
+    if(ba == null && bb == null)
+      return keyRank(relKey(a)) - keyRank(relKey(b)) || a.artist.localeCompare(b.artist);
+    if(ba == null) return 1;
+    if(bb == null) return -1;
+    return ba - bb || keyRank(relKey(a)) - keyRank(relKey(b));
+  });
+  renumber(on);
+  pushUndo(before);
+  save(); renderAll();
+  return on.length;
+}
+
 /* ── tap to pick up, tap to place ───────────────────────────
    Dragging a 26px spine along a rail that can't scroll is miserable on
    a phone and fiddly with a mouse, so this is the main way to move a
@@ -2231,6 +2299,7 @@ function renderTracks(){
   }
   let html = '', lastKey = null;
   const grouped = sort === 'keybpm';
+  const codes = shelfCodes();          /* once per render, not once per row */
   rows.forEach(({t,i,it}) => {
     if(grouped && t.key !== lastKey){
       lastKey = t.key;
@@ -2240,7 +2309,7 @@ function renderTracks(){
       ${it.art?`<img class="art" src="${esc(it.art)}" alt="" loading="lazy">`:'<span class="art"></span>'}
       <span class="who">
         <b>${esc(t.title || 'Untitled')}</b>
-        <span>${esc(t.artist || it.artist)} · ${esc(it.title)}${t.pos?' · '+esc(t.pos):''}</span>
+        <span><i class="loc">${esc(locCode(it, codes))}</i> · ${esc(t.artist || it.artist)} · ${esc(it.title)}${t.pos?' · '+esc(t.pos):''}</span>
       </span>
       <span class="num">
         <span class="bpmv">${t.bpm ? t.bpm : '<small>—</small>'}</span>
@@ -2333,7 +2402,8 @@ function renderFilters(){
   $('#shelfList').innerHTML = DB.shelves.map((s,i)=>
     `<div class="q"><div class="code">${esc(s)}</div>
      <div class="st">${DB.items.filter(x=>x.shelf===s).length} records</div>
-     <button class="ghost" data-shelf-rename="${i}" style="margin-left:10px">rename</button>
+     <button class="ghost" data-shelf-tempo="${i}" style="margin-left:10px">tempo order</button>
+     <button class="ghost" data-shelf-rename="${i}" style="margin-left:6px">rename</button>
      ${DB.shelves.length>1?`<button class="ghost" data-shelf-remove="${i}" style="margin-left:6px">remove</button>`:''}</div>`).join('');
 }
 
@@ -2407,6 +2477,51 @@ function renderList(){
    renderFilters. renderList draws the rail too, so changing the shelf
    filter reorders the spines as well as the grid. */
 function renderAll(){ renderStrip(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); }
+
+/* ── where is it? ───────────────────────────────────────────
+   Tapping a track in the list used to do nothing at all. It now answers
+   the only question worth asking of a track you have just found: where
+   do I go and pull the record.
+
+   The two neighbours matter more than the number. If the crate has
+   drifted a place or two — and it will, until the rack matches the app —
+   you still find it by the sleeves either side, which a bare "23rd"
+   cannot do. Position is counted from the sorted shelf rather than read
+   off item.slot, so a stale number can never outlive the order it
+   describes. */
+function openLocator(uid){
+  const it = DB.items.find(x => x.uid === uid); if(!it) return;
+  const on = DB.items.filter(x => x.shelf === it.shelf).sort(bySlot);
+  const n = on.length;
+  const pos = Math.max(1, on.findIndex(x => x.uid === uid) + 1);
+  const pct = n ? ((pos - 0.5) / n) * 100 : 50;
+  const prev = on[pos - 2], next = on[pos];
+  const gone = !DB.shelves.includes(it.shelf);
+  const who = q => esc(q.artist) + ' — ' + esc(q.title);
+  $('#sheetBody').innerHTML = `
+    <div class="eyebrow" style="margin-top:4px">Where to find it</div>
+    <h3 style="margin:0 0 2px;font-size:18px;line-height:1.25">${esc(it.title)}</h3>
+    <div class="meta">${esc(it.artist)}</div>
+    <div class="chips">
+      <span class="chip" style="color:var(--sticker);border-color:var(--sticker)">${esc(locCode(it, shelfCodes()))}</span>
+      <span class="chip">${esc(it.shelf || 'no shelf')}${gone ? ' · missing' : ''}</span>
+      <span class="chip">${pos} of ${n}</span>
+    </div>
+    <div class="ruler"><b>front &nbsp;→&nbsp; back</b><i style="left:calc(${pct.toFixed(1)}% - 1px)"></i></div>
+    <p class="neigh">
+      ${prev ? `filed after &nbsp;<b>${who(prev)}</b>` : 'Right at the <b>front</b> of the crate.'}
+      ${prev && next ? '<br>and before &nbsp;' : next ? '<br>just before &nbsp;' : ''}${next ? `<b>${who(next)}</b>` : ''}
+      ${prev && !next ? '<br>Right at the <b>back</b> of the crate.' : ''}
+    </p>
+    <p class="hint">Counted from the front. If the crate has drifted, go by the two
+      records either side rather than the number.</p>
+    <div class="row" style="margin-top:14px">
+      <button class="btn quiet" id="locOpen">Open the record</button>
+    </div>`;
+  $('#locOpen').onclick = () => openSheet(uid);
+  $('#scrim').classList.add('on');
+  $('#sheet').classList.add('on');
+}
 
 /* ── detail sheet ─────────────────────────────────────────── */
 let openUid = null;
@@ -2937,6 +3052,10 @@ $('#clearF').onclick = () => {
 document.addEventListener('click', e => {
   const rec = e.target.closest('.rec, .spine');
   if(rec){ openSheet(rec.dataset.uid); return; }
+  /* a track row answers "where is it", not "tell me about it" — the
+     record sheet is one tap further on, from inside the locator */
+  const tr = e.target.closest('.trow');
+  if(tr){ openLocator(tr.dataset.uid); return; }
   /* the remove button only - matching a bare [data-shelf] here once caught
      the shelf tiles too, and deleted whatever shelf sat at that index */
   const sh = e.target.closest('[data-shelf-remove]');
@@ -2946,6 +3065,24 @@ document.addEventListener('click', e => {
     DB.shelves.splice(i,1);
     DB.items.forEach(x => { if(x.shelf===name){ x.shelf = DB.shelves[0]; x.slot = nextSlot(DB.shelves[0]); } });
     save(); renderAll();
+    return;
+  }
+  /* Filing a whole shelf by tempo. Confirmed first because it renumbers
+     every record on the shelf in one go, and the undo button lives over
+     on the Crate screen rather than here. */
+  const st = e.target.closest('[data-shelf-tempo]');
+  if(st){
+    const name = DB.shelves[+st.dataset.shelfTempo];
+    const on = DB.items.filter(x => x.shelf === name);
+    if(on.length < 2) return toast('Not enough records on that shelf to sort');
+    const noBpm = on.filter(x => relBpm(x) == null).length;
+    if(!confirm('Re-file "' + name + '" into tempo order?\n\n' + on.length +
+      ' records will be renumbered by average BPM, then key.' +
+      (noBpm ? '\n\n' + noBpm + ' of them have no BPM yet and will go to the back.' : '') +
+      '\n\nYou can undo this from the Crate screen.')) return;
+    const done = sortShelfByTempo(name);
+    toast('Filed ' + done + ' records by tempo' +
+      (noBpm ? ' · ' + noBpm + ' still to measure' : ''), 3600);
     return;
   }
   /* Renaming is not just DB.shelves[i]: a record stores its shelf by
