@@ -658,7 +658,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.13';
+const APP_VERSION = '0.12.14';
 
 const mem = {};
 const store = {
@@ -2044,13 +2044,21 @@ function sortShelfByTempo(name){
   const on = DB.items.filter(x => x.shelf === name);
   if(on.length < 2) return 0;
   const before = placement();
+  /* Coerced, never read straight off the record: a CSV import or an old
+     hand-added entry can reach here with no artist at all, and an
+     undefined.localeCompare throws inside the comparator — which kills
+     the sort silently, leaving the shelf untouched and no error on
+     screen. That is exactly what it looks like when nothing happens. */
+  const byName = (a, b) =>
+    String(a.artist || '').localeCompare(String(b.artist || '')) ||
+    String(a.title  || '').localeCompare(String(b.title  || ''));
   on.sort((a, b) => {
     const ba = relBpm(a), bb = relBpm(b);
     if(ba == null && bb == null)
-      return keyRank(relKey(a)) - keyRank(relKey(b)) || a.artist.localeCompare(b.artist);
+      return keyRank(relKey(a)) - keyRank(relKey(b)) || byName(a, b);
     if(ba == null) return 1;
     if(bb == null) return -1;
-    return ba - bb || keyRank(relKey(a)) - keyRank(relKey(b));
+    return ba - bb || keyRank(relKey(a)) - keyRank(relKey(b)) || byName(a, b);
   });
   renumber(on);
   pushUndo(before);
@@ -3136,7 +3144,12 @@ document.addEventListener('click', e => {
       ' records will be renumbered by average BPM, then key.' +
       (noBpm ? '\n\n' + noBpm + ' of them have no BPM yet and will go to the back.' : '') +
       '\n\nYou can undo this from the Crate screen.')) return;
-    const done = sortShelfByTempo(name);
+    /* A throw inside the comparator used to die here with nothing on
+       screen — the shelf simply didn't move and there was no way to tell
+       why. Anything that fails now says so. */
+    let done;
+    try { done = sortShelfByTempo(name); }
+    catch(err){ return toast('Could not sort that shelf — ' + err.message, 5000); }
     toast('Filed ' + done + ' records by tempo' +
       (noBpm ? ' · ' + noBpm + ' still to measure' : ''), 3600);
     return;
