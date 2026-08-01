@@ -684,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.21';
+const APP_VERSION = '0.12.22';
 
 const mem = {};
 const store = {
@@ -1908,13 +1908,29 @@ function renderStrip(){
    is what makes dragging one mean anything. */
 let crateEdit = false;
 
+/* How many spines the rail will draw at once. */
+const RAIL_MAX = 150;
+
 function crateList(){
   const shelf = $('#shelfFilter') ? $('#shelfFilter').value : '';
-  return DB.items
+  const all = DB.items
     .filter(i => !shelf || i.shelf === shelf)
     .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b)
-                   || (a.added||'').localeCompare(b.added||''))
-    .slice(0, 150);
+                   || (a.added||'').localeCompare(b.added||''));
+  if(all.length <= RAIL_MAX) return all;
+  /* Always taking the FIRST 150 meant a record further down the crate had
+     no spine at all, so opening it lit the shelf tile and gave its
+     position but never popped the sleeve — there was nothing there to
+     pop. With a record open the window slides to sit around it, which
+     also keeps its real neighbours either side, which is the whole point
+     of the rail. hereUid is only ever set while a sheet is open, so
+     arranging and select-all still see the ordinary first-150 window. */
+  let start = 0;
+  if(hereUid){
+    const at = all.findIndex(i => i.uid === hereUid);
+    if(at >= 0) start = Math.min(Math.max(0, at - Math.floor(RAIL_MAX/2)), all.length - RAIL_MAX);
+  }
+  return all.slice(start, start + RAIL_MAX);
 }
 
 function updateCrateBar(){
@@ -2293,6 +2309,11 @@ function paintHere(){
 function showHere(uid){
   const changed = hereUid !== uid;
   hereUid = uid;
+  /* The rail is drawn before this runs, so it was built by crateList()
+     while hereUid was still null — the window could not have included
+     this record yet. If there is no spine for it, rebuild the rail now
+     that crateList() knows what to centre on. */
+  if(uid && !document.querySelector('#crate .spine[data-uid="' + CSS.escape(uid) + '"]')) renderCrate();
   paintHere();
   if(!changed) return;
   /* Bring the popped record into the rail's view. block:'nearest' so
@@ -2682,6 +2703,12 @@ function renderList(){
   if(MODE==='sleeves') renderGrid(); else renderTracks();
   paintPicked();
   paintSel();
+  /* Must be here, not only in renderShelfGrid: that runs BEFORE
+     renderCrate rebuilds the rail from scratch, so the open record's
+     spine lost its lift and its sleeve on every redraw — a grade edit,
+     a note, a BPM — while the shelf tile stayed lit, because the tiles
+     were not rebuilt. Same reason picked and ticked are repainted here. */
+  paintHere();
 }
 /* renderShelfGrid and the rail both read the shelf filter, so they follow
    renderFilters. renderList draws the rail too, so changing the shelf
@@ -3056,7 +3083,11 @@ function reviewLookups(uid, found){
 }
 
 function closeSheet(){
-  openUid=null; hereUid=null; paintHere();
+  openUid=null; hereUid=null;
+  /* Put the rail back to its ordinary window. Leaving it centred on a
+     record that is no longer open would leave the spines on screen
+     disagreeing with crateList(), which is what "select all" reads. */
+  renderCrate(); paintHere();
   $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on');
 }
 
