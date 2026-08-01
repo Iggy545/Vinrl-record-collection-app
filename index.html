@@ -690,7 +690,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.23';
+const APP_VERSION = '0.12.24';
 
 const mem = {};
 const store = {
@@ -2948,12 +2948,19 @@ function openSheet(uid){
     const o = DB.items.find(x => x.uid === uid);
     const tks = (o && o.tracks) || [];
     if(!tks.length) return toast('No tracks on this one yet — add them first', 3600);
+    /* Only ask about tracks with a gap. Both sources are rate limited —
+       MusicBrainz to one call a second — so re-asking about a track you
+       have already filled in costs real time and buys nothing, since the
+       answer could not be used anyway. */
+    const todo = tks.map((t, i) => ({t, i})).filter(({t}) => !t.bpm || !t.key);
+    if(!todo.length)
+      return toast('Every track here already has a tempo and a key — nothing to look up', 4600);
     const btn = $('#sLookup');
     btn.disabled = true; spin(true);
     const found = [];
-    for(let i = 0; i < tks.length; i++){
-      btn.textContent = 'Looking up ' + (i+1) + ' of ' + tks.length + '…';
-      const t = tks[i];
+    for(let k = 0; k < todo.length; k++){
+      btn.textContent = 'Looking up ' + (k+1) + ' of ' + todo.length + '…';
+      const {t, i} = todo[k];
       found.push({i, t, r: await lookupTempoKey(t.artist || o.artist, t.title || '')});
     }
     spin(false);
@@ -3033,20 +3040,33 @@ function openSheet(uid){
    actually matched, because the failure mode isn't "no answer" — it's a
    confident answer for the wrong mix. */
 function reviewLookups(uid, found){
-  const usable = found.filter(f => f.r && (f.r.bpm || f.r.key));
+  /* What a result would actually change. A field already filled in is
+     never offered, so the panel can't propose something it would then
+     refuse to write. */
+  const fills = f => ({
+    bpm: !!(f.r && f.r.bpm && !f.t.bpm),
+    key: !!(f.r && f.r.key && !f.t.key)
+  });
+  const usable = found.filter(f => { const w = fills(f); return w.bpm || w.key; });
   if(!usable.length){
-    toast('Nothing found for any of these tracks', 4200);
+    toast('Nothing new found — what these tracks were missing came back empty', 4600);
     openSheet(uid);
     return;
   }
   const rows = found.map(f => {
     const name = esc(f.t.pos || (f.i + 1)) + ' · ' + esc(f.t.title || 'Untitled');
-    if(!f.r || (!f.r.bpm && !f.r.key))
+    const w = fills(f);
+    if(!w.bpm && !w.key)
       return `<div class="ed"><div class="top"><b>${name}</b>
         <span style="margin-left:auto;color:var(--dust)">nothing found</span></div></div>`;
     const now = [f.t.bpm ? f.t.bpm + ' BPM' : '', f.t.key || ''].filter(Boolean).join(' · ') || 'empty';
-    const got = (f.r.bpm ? f.r.bpm + ' BPM' : 'no tempo') +
-                (f.r.key ? ' · ' + f.r.key + ' (' + esc(KEYNAME[f.r.key] || '') + ')' : ' · no key');
+    const got = [w.bpm ? f.r.bpm + ' BPM' : '',
+                 w.key ? esc(f.r.key) + ' (' + esc(KEYNAME[f.r.key] || '') + ')' : ''
+                ].filter(Boolean).join(' · ');
+    /* If the source also answered something you already have, say that it
+       is being kept — otherwise it reads as though it was ignored. */
+    const keeping = [f.r.bpm && f.t.bpm ? 'your ' + f.t.bpm + ' BPM' : '',
+                     f.r.key && f.t.key ? 'your ' + f.t.key : ''].filter(Boolean).join(' and ');
     return `<div class="ed">
       <div class="top"><b>${name}</b></div>
       <label class="bot" style="gap:10px;align-items:center;cursor:pointer">
@@ -3054,13 +3074,15 @@ function reviewLookups(uid, found){
         <span><b>${got}</b></span>
       </label>
       <div class="hint" style="margin:4px 0 0">now ${esc(now)} — matched “${esc(f.r.matched || '?')}”
-        via ${esc(f.r.source)}${f.r.conf ? ' · ' + f.r.conf + '% sure of the key' : ''}</div>
+        via ${esc(f.r.source)}${f.r.conf ? ' · ' + f.r.conf + '% sure of the key' : ''}${
+        keeping ? ' · keeping ' + esc(keeping) : ''}</div>
     </div>`;
   }).join('');
 
   $('#sheetBody').innerHTML = `
     <h3 style="margin:0 0 4px">Tempo &amp; key found</h3>
-    <p class="hint" style="margin:0 0 12px">Check what each one matched before you accept it — a wrong mix
+    <p class="hint" style="margin:0 0 12px">Only empty boxes are filled — anything you have already
+      entered is left alone. Check what each one matched before you accept it: a wrong mix
       will give a confident, wrong number. Untick anything that looks off.</p>
     ${rows}
     <div class="row" style="margin-top:14px">
@@ -3078,12 +3100,16 @@ function reviewLookups(uid, found){
       if(!f || !f.r) return;
       const t = o.tracks[f.i];
       if(!t) return;
-      if(f.r.bpm) t.bpm = f.r.bpm;
-      if(f.r.key) t.key = f.r.key;
-      n++;
+      /* Gaps only, re-checked here rather than trusting the panel — this
+         is the last point before the write, and it used to overwrite a
+         tempo you had tapped in yourself. */
+      let touched = false;
+      if(f.r.bpm && !t.bpm){ t.bpm = f.r.bpm; touched = true; }
+      if(f.r.key && !t.key){ t.key = f.r.key; touched = true; }
+      if(touched) n++;
     });
     save(); renderAll();
-    toast(n ? n + ' track' + (n === 1 ? '' : 's') + ' updated' : 'Nothing ticked', 3200);
+    toast(n ? n + ' track' + (n === 1 ? '' : 's') + ' filled in' : 'Nothing ticked', 3200);
     openSheet(uid);
   };
 }
