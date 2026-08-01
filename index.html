@@ -684,7 +684,7 @@ nav button.on{color:var(--sticker)}
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.18';
+const APP_VERSION = '0.12.19';
 
 const mem = {};
 const store = {
@@ -2911,16 +2911,27 @@ function openSheet(uid){
     try{
       const rel = await fetchRelease(it.id);
       const o = DB.items.find(x=>x.uid===uid);
-      o.low = typeof rel.lowest_price==='number'?rel.lowest_price:null;
-      o.forSale = rel.num_for_sale ?? null; o.priced = Date.now();
+      /* Discogs sends no lowest_price when nothing happens to be listed
+         this week, which is not the same as the record being worth
+         nothing. Only a real number overwrites what is already here, so
+         a quiet week can't wipe a price you had. priced is stamped with
+         it, so it keeps meaning "when this price came from". */
+      const gotPrice = typeof rel.lowest_price === 'number';
+      if(gotPrice){ o.low = rel.lowest_price; o.priced = Date.now(); }
+      if(rel.num_for_sale != null) o.forSale = rel.num_for_sale;   /* 0 is an answer */
       const fresh = flatTracks(rel.tracklist);
-      let note = 'Price updated';
+      let note = gotPrice ? 'Price updated'
+                          : (o.low != null ? 'None listed — price left as it was'
+                                           : 'None listed, so still no price');
       if(fresh.length){
         const before = (o.tracks||[]).length;
         o.tracks = mergeTracks(fresh, o.tracks);
         const kept = o.tracks.filter(t => t.bpm || t.key).length;
-        note = `Updated · ${fresh.length} track${fresh.length===1?'':'s'}`
-             + (fresh.length !== before ? ` (was ${before})` : '')
+        /* appended, not replacing: the price line is the one that says
+           whether anything was left alone, and it used to be thrown away
+           the moment a record had a tracklist — which is nearly always */
+        note += ` · ${o.tracks.length} track${o.tracks.length===1?'':'s'}`
+             + (o.tracks.length !== before ? ` (was ${before})` : '')
              + (kept ? ` · kept ${kept} BPM/key` : '');
       }
       if(!o.art && rel.images?.[0]) o.art = rel.images[0].uri150 || rel.images[0].uri;
@@ -3181,15 +3192,17 @@ async function backfill(){
       if(!o.art && rel.images?.[0]) o.art = rel.images[0].uri150 || rel.images[0].uri;
       const fresh = flatTracks(rel.tracklist);
       if(fresh.length) o.tracks = mergeTracks(fresh, o.tracks);
-      o.low     = typeof rel.lowest_price === 'number' ? rel.lowest_price : null;
-      o.forSale = rel.num_for_sale ?? null;
-      o.have    = rel.community?.have ?? null;
-      o.want    = rel.community?.want ?? null;
+      /* Same rule as the single-record refresh: a missing figure means
+         Discogs has nothing listed today, not that the number is now
+         zero. Only a real value overwrites one already here. */
+      if(typeof rel.lowest_price === 'number'){ o.low = rel.lowest_price; o.priced = Date.now(); }
+      if(rel.num_for_sale != null)    o.forSale = rel.num_for_sale;
+      if(rel.community?.have != null) o.have    = rel.community.have;
+      if(rel.community?.want != null) o.want    = rel.community.want;
       if(!o.country)          o.country = rel.country || '';
       if(!(o.genres||[]).length) o.genres = (rel.genres||[]).concat(rel.styles||[]);
       if(!o.year)             o.year = rel.year || (rel.released||'').slice(0,4) || '';
       if(!o.format)           o.format = (rel.formats||[]).map(f => [f.name, f.text, (f.descriptions||[]).join(' ')].filter(Boolean).join(' ')).join(', ');
-      o.priced = Date.now();
       done++; save();
     }catch(e){
       failed++;
