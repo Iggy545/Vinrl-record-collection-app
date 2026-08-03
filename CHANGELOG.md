@@ -4,6 +4,33 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.31 - 2026-08-03 20:55
+
+Pick the pressing on camera scans; label sort blanks-last; range-check looked-up tempos
+
+- Camera scans no longer take Discogs first match silently. More than one hit
+  parks the job as pick-one and opens the picker once the queue has drained,
+  unless a sheet is already open. A single hit still files without
+  interrupting. Help sheet updated.
+- Label sort put unlabelled records at the top: the tilde sentinel does not
+  work with localeCompare. Explicit blanks-last check in both views.
+- A tempo from GetSongBPM or AcousticBrainz skipped the 40-300 range check the
+  typed box enforces. inRange() now guards lookupTempoKey for both sources; a
+  silly tempo is dropped, the key is kept.
+- sync.ps1 takes .sync-hold (ship nothing this turn) and .sync-note (this
+  message), both outside the repo so they are never committed.
+- sync.ps1 commits via git commit -F, not -m. PowerShell 5.1 re-parses native
+  command arguments, so a double quote in the message split it and git read
+  the rest as pathspecs. That failed AFTER the version bump and staging, and
+  said nothing, so this release was left staged and unpushed once already. A
+  failed commit now also writes .sync-error for the next session to find.
+
+Verified against the real code: 40 browser checks for the app changes, and the
+commit path dry-run against the exact message that broke it.
+
+- Modified `index.html` (+82/-21)
+- Modified `scripts/sync.ps1` (+88/-7)
+
 ## 0.12.30 - 2026-08-03 11:49
 
 Automatic sync - 2 files changed

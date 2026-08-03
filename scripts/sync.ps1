@@ -17,6 +17,18 @@
     It never throws on failure — a failed push leaves the commit in place
     locally and prints a warning, so a network blip can't block your work.
 
+    Two optional files sit in the parent folder of the repo, outside it, so
+    they are never committed:
+
+      .sync-hold  If present, the run exits immediately and ships nothing.
+                  Its contents, if any, are printed as the reason. Use it to
+                  keep unfinished work off the live site across a turn; the
+                  next run without it releases everything at once.
+
+      .sync-note  Its contents become the commit subject and changelog entry
+                  instead of "Automatic sync". Deleted once used, so it can
+                  never mislabel a later release.
+
 .EXAMPLE
     .\scripts\sync.ps1 -Message "Add sleeve condition grading"
 
@@ -58,6 +70,25 @@ Set-Location -LiteralPath $repo
 $insideRepo = git rev-parse --is-inside-work-tree 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Not a git repository: $repo. Run scripts\setup-github.ps1 first."
+    exit 0
+}
+
+# ── the hold and note files ──────────────────────────────────────────────
+# Both live in the parent of the repo, deliberately: they are working-state,
+# they must never be committed, and .gitignore can't be trusted to catch a
+# file the hook itself creates.
+$outside = Split-Path -Parent $repo
+$holdFile = Join-Path $outside '.sync-hold'
+$noteFile = Join-Path $outside '.sync-note'
+
+# Held: the hook fires but ships nothing, so a turn can leave half-finished
+# work in index.html without it reaching the live site. Nothing is lost —
+# the next unheld run picks up everything that accumulated meanwhile.
+if (Test-Path $holdFile) {
+    $why = ''
+    try { $why = (Get-Content $holdFile -Raw -ErrorAction Stop).Trim() } catch { }
+    if ($why) { Write-Info "Sync held: $why" }
+    else { Write-Info "Sync held by $holdFile - delete it to resume shipping." }
     exit 0
 }
 
@@ -138,6 +169,19 @@ switch ($Bump) {
 $next = "$major.$minor.$patch"
 
 # ── build the changelog entry ────────────────────────────────────────────
+# A -Message on the command line wins; otherwise .sync-note is what a turn
+# leaves behind to say what it actually did. Without it every entry reads
+# "Automatic sync - 3 files changed", which makes the changelog useless for
+# finding when a behaviour changed.
+$usedNote = $false
+if ([string]::IsNullOrWhiteSpace($Message) -and (Test-Path $noteFile)) {
+    try {
+        $note = (Get-Content $noteFile -Raw -ErrorAction Stop).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($note)) { $Message = $note; $usedNote = $true }
+    }
+    catch { }
+}
+
 if ([string]::IsNullOrWhiteSpace($Message)) {
     $fileCount = $lines.Count
     $noun = 'files'
@@ -193,17 +237,54 @@ if (Test-Path $appFile) {
 }
 
 # ── commit ───────────────────────────────────────────────────────────────
-git add -A | Out-Null
-git commit -m "v$next - $Message" | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Commit failed. Run 'git status' in $repo to see why."
-    exit 0
+# The message goes via a file, never `git commit -m "$Message"`. Windows
+# PowerShell 5.1 re-parses a native command's arguments, so a double quote
+# anywhere in the message splits it and git reads the remainder as pathspecs:
+#   error: pathspec 'one and opens the picker...' did not match any file(s)
+# The whole release then fails while VERSION, CHANGELOG.md and index.html
+# have already been bumped and staged — v0.12.31's work sat uncommitted and
+# unpushed exactly this way, and nothing said so. -F takes the bytes as they
+# are: no quoting, no length limit, no newline mangling.
+$subject = ($Message -split "`r?`n")[0]
+$rest = $Message.Substring([Math]::Min($subject.Length, $Message.Length)).TrimStart("`r", "`n")
+$commitText = "v$next - $subject"
+if ($rest) { $commitText += "`r`n`r`n$rest" }
+
+$msgFile = Join-Path ([System.IO.Path]::GetTempPath()) ("crate-commit-" + [guid]::NewGuid().ToString('N') + '.txt')
+[System.IO.File]::WriteAllText($msgFile, $commitText, $utf8)
+
+try {
+    git add -A | Out-Null
+    git commit -F $msgFile | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        # Loud, not just a warning: with -Quiet on the Stop hook nobody sees
+        # stderr, which is how the failure above went unnoticed for a whole
+        # turn. A file on disk survives for the next session to trip over.
+        $why = "Commit of v$next FAILED at $(Get-Date -Format 'yyyy-MM-dd HH:mm'). " +
+               "The version bump and staging already happened, so 'git status' in $repo " +
+               "shows the work staged and uncommitted. Fix, commit, then delete this file."
+        [System.IO.File]::WriteAllText((Join-Path $outside '.sync-error'), $why, $utf8)
+        Write-Warning $why
+        exit 0
+    }
 }
-Write-Info "Committed v$next - $Message"
+finally {
+    Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue
+}
+
+# Got here, so any previous failure is history.
+Remove-Item -LiteralPath (Join-Path $outside '.sync-error') -Force -ErrorAction SilentlyContinue
+Write-Info "Committed v$next - $subject"
+
+# Consumed, not kept: a note left lying around would silently re-label the
+# next unrelated release with the previous turn's message.
+if ($usedNote) { Remove-Item -LiteralPath $noteFile -Force -ErrorAction SilentlyContinue }
 
 # Annotated, not lightweight - 'git push --follow-tags' below ignores
 # lightweight tags, so the version markers would never reach GitHub.
-git tag -f -a "v$next" -m "v$next - $Message" | Out-Null
+# Subject only, and via -m on a single line with no quotes to mangle: the
+# full text is already on the commit.
+git tag -f -a "v$next" -m "v$next" | Out-Null
 
 # ── push ─────────────────────────────────────────────────────────────────
 if ($NoPush) {

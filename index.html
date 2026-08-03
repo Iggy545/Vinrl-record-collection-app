@@ -296,7 +296,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.30';
+const APP_VERSION = '0.12.31';
 
 const mem = {};
 const store = {
@@ -985,9 +985,21 @@ async function fromAcousticBrainz(artist, title){
   return null;
 }
 
+/* Both sources funnel through here, so the 40–300 range the typed box and
+   tap tempo enforce is applied in one place — this was the one path that
+   could still store an out-of-range BPM. Dropping just the tempo and
+   keeping the key: an odd number says nothing about the key analysis, and
+   a half-answer beats no answer. A result with nothing usable left in it
+   is discarded so the next source still gets its turn. */
+function inRange(r){
+  if(!r) return null;
+  if(r.bpm != null && !(r.bpm >= BPM_MIN && r.bpm <= BPM_MAX)) r.bpm = null;
+  return (r.bpm != null || r.key) ? r : null;
+}
+
 async function lookupTempoKey(artist, title){
-  try{ const g = await fromGetSongBpm(artist, title); if(g) return g; }catch(e){}
-  try{ return await fromAcousticBrainz(artist, title); }catch(e){ return null; }
+  try{ const g = inRange(await fromGetSongBpm(artist, title)); if(g) return g; }catch(e){}
+  try{ return inRange(await fromAcousticBrainz(artist, title)); }catch(e){ return null; }
 }
 
 /* every track in the collection, flattened, with its release attached */
@@ -1082,6 +1094,17 @@ async function pump(){
   try{
     const hits = await findRelease(job.code);
     if(!hits.length){ job.state='miss'; job.note='no match'; }
+    else if(hits.length > 1){
+      /* One barcode, many pressings — original, reissue, promo, a different
+         country — and they carry different tracklists and different prices.
+         The scan used to take hits[0] silently to avoid a dialog per sleeve
+         while working down a shelf, but the camera has closed itself on
+         every hit since v0.12.2, so that shelf-at-a-time flow no longer
+         exists and the dialog it was avoiding can't happen. Nothing is
+         filed until you pick. */
+      job.state='choose'; job.hits=hits;
+      job.note = hits.length + ' pressings — pick the one you own';
+    }
     else{
       const rel = await fetchRelease(hits[0].id);
       const it = toItem(rel, job.code);
@@ -1090,7 +1113,6 @@ async function pump(){
       job.state='done';
       job.note = (dup ? 'dupe · ' : '') + it.artist + ' — ' + it.title;
       job.uid = it.uid;
-      job.alts = hits.slice(1,6).map(h => ({id:h.id, title:h.title, year:h.year, fmt:(h.format||[]).join(' ')}));
       renderAll();
     }
   }catch(e){
@@ -1100,16 +1122,24 @@ async function pump(){
   working = false; renderQueue();
   const more = QUEUE.some(q => q.state === 'waiting');
   spin(more);
-  if(more) pump();
+  if(more) return pump();
+  /* Only once the queue has drained, and only if nothing else is already
+     on screen — opening a sheet mid-queue would stack pickers and steal
+     the screen from a record you had open. The rest stay as tappable
+     "pick one" rows, so a choice is never lost, only deferred. */
+  const pending = QUEUE.find(q => q.state === 'choose');
+  if(pending && !$('#sheet').classList.contains('on')) openPicker(pending.hits, pending.code, pending);
 }
 
 function renderQueue(){
   const el = $('#queue');
   if(!QUEUE.length){ el.innerHTML = '<div class="hint">Nothing queued. Scans land here and resolve one at a time so Discogs doesn\'t rate-limit you.</div>'; return; }
-  el.innerHTML = QUEUE.slice(0,25).map(q => {
+  el.innerHTML = QUEUE.slice(0,25).map((q, i) => {
     const cls = q.state==='done'?'done':q.state==='miss'?'miss':'';
-    const st = q.state==='waiting'?'queued':q.state==='working'?'looking…':q.state==='done'?'added':'no match';
-    return `<div class="q ${cls}">
+    const st = q.state==='waiting'?'queued':q.state==='working'?'looking…':
+               q.state==='done'?'added':q.state==='choose'?'pick one':'no match';
+    const tap = q.state==='choose';
+    return `<div class="q ${cls}"${tap?` data-choose="${i}" style="cursor:pointer"`:''}>
       <div style="min-width:0">
         <div class="code">${esc(q.code)}</div>
         ${q.note?`<div style="font-size:11.5px;color:var(--dust);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:56vw">${esc(q.note)}</div>`:''}
@@ -1117,15 +1147,23 @@ function renderQueue(){
       <div class="st">${st}</div>
     </div>`;
   }).join('');
+  /* Indexed against the same slice that was rendered, not against QUEUE —
+     the list is capped at 25 and the two would drift apart. */
+  el.querySelectorAll('[data-choose]').forEach(row => {
+    row.onclick = () => {
+      const q = QUEUE.slice(0,25)[+row.dataset.choose];
+      if(q && q.hits) openPicker(q.hits, q.code, q);
+    };
+  });
 }
 
 /* ══════════════════════════════════════════════════════════
    searching by hand — show what Discogs found and let you choose
    A barcode can match a dozen pressings: the original, the reissue,
    the promo, a different country. Taking the first hit silently is how
-   you end up with the wrong tracklist and the wrong price, so a typed
-   search asks. Camera scanning still queues automatically — you don't
-   want a dialog per sleeve when working down a shelf.
+   you end up with the wrong tracklist and the wrong price, so every path
+   in — typed, OCR and camera — asks whenever there is more than one.
+   A single match is still filed without interrupting you.
    ══════════════════════════════════════════════════════════ */
 const isBarcode = s => /^\d{8,14}$/.test(String(s||'').trim());
 
@@ -1147,7 +1185,9 @@ async function searchAndChoose(code, parts){
   }
 }
 
-function openPicker(hits, code){
+/* `job` is set when the picker was opened for a queued scan rather than a
+   typed search, so the queue row can be closed off either way. */
+function openPicker(hits, code, job){
   const list = hits.slice(0, 12);
   const rows = list.map((h, i) => {
     const have = DB.items.some(x => x.id === h.id);
@@ -1170,15 +1210,20 @@ function openPicker(hits, code){
     <div class="picklist">${rows}</div>
     <button class="btn quiet" id="pickNone" style="margin-top:12px">None of these</button>`;
 
-  $('#pickNone').onclick = closeSheet;
+  $('#pickNone').onclick = () => {
+    /* Settled, not left pending: a row that stays "pick one" after you have
+       said none of them nags for a decision you already made. */
+    if(job){ job.state='miss'; job.note='none picked'; job.hits=null; renderQueue(); }
+    closeSheet();
+  };
   $('#sheetBody').querySelectorAll('.pick').forEach(btn => {
-    btn.onclick = () => addChosen(list[+btn.dataset.i], code);
+    btn.onclick = () => addChosen(list[+btn.dataset.i], code, job);
   });
   $('#scrim').classList.add('on');
   $('#sheet').classList.add('on');
 }
 
-async function addChosen(hit, code){
+async function addChosen(hit, code, job){
   if(!hit) return;
   closeSheet();
   spin(true);
@@ -1188,6 +1233,11 @@ async function addChosen(hit, code){
     const it = toItem(rel, isBarcode(code) ? code.trim() : '');
     const dup = DB.items.some(x => x.id === it.id);
     fileNew(it);
+    if(job){
+      job.state='done'; job.hits=null; job.uid=it.uid;
+      job.note = (dup ? 'dupe · ' : '') + it.artist + ' — ' + it.title;
+      renderQueue();
+    }
     save(); renderAll();
     toast((dup ? 'Added another copy · ' : 'Added · ') + it.artist + ' — ' + it.title, 4200);
   }catch(e){
@@ -2094,13 +2144,17 @@ function visible(){
     artist:(a,b)=> a.artist.localeCompare(b.artist) || (a.year+'').localeCompare(b.year+''),
     year:(a,b)=> (b.year||0) - (a.year||0),
     value:(a,b)=> (itemValue(b)??-1) - (itemValue(a)??-1),
-    label:(a,b)=> (a.label||'~').localeCompare(b.label||'~'),
     /* Blanks are pushed to the end explicitly rather than with a '~'
        sentinel: localeCompare puts punctuation BEFORE letters, so '~'
-       sorts a record with no genre to the top, which is the opposite of
-       what it looks like it is doing. Artist is coerced too — a CSV
-       import can arrive without one, and undefined.localeCompare throws
-       inside a comparator. */
+       sorts an unlabelled record to the TOP, which is the opposite of what
+       it looks like it is doing. Artist is coerced too — a CSV import can
+       arrive without one, and undefined.localeCompare throws inside a
+       comparator. Same shape as genre and track below. */
+    label:(a,b)=>{
+      const la = String(a.label||'').trim(), lb = String(b.label||'').trim();
+      if(!la !== !lb) return la ? -1 : 1;
+      return la.localeCompare(lb) || String(a.artist||'').localeCompare(String(b.artist||''));
+    },
     genre:(a,b)=>{
       const ga = relGenre(a), gb = relGenre(b);
       if(!ga !== !gb) return ga ? -1 : 1;
@@ -2139,7 +2193,13 @@ function visibleTracks(){
     artist:(a,b)=> a.it.artist.localeCompare(b.it.artist) || a.i - b.i,
     year:(a,b)=> (b.it.year||0) - (a.it.year||0),
     value:(a,b)=> (itemValue(b.it)??-1) - (itemValue(a.it)??-1),
-    label:(a,b)=> (a.it.label||'~').localeCompare(b.it.label||'~'),
+    /* Blanks last, for the same localeCompare reason as the sleeve view. */
+    label:(a,b)=>{
+      const la = String(a.it.label||'').trim(), lb = String(b.it.label||'').trim();
+      if(!la !== !lb) return la ? -1 : 1;
+      return la.localeCompare(lb)
+             || String(a.it.artist||'').localeCompare(String(b.it.artist||'')) || a.i - b.i;
+    },
     /* The track's own genre here, not the record's — the track list is
        the surface where one side being Dub and the other Disco matters.
        Blanks last, for the same localeCompare reason as the sleeve view. */
@@ -3660,6 +3720,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
     <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
+    <p class="hint"><b>You pick the pressing.</b> One barcode often matches a dozen releases — the original, the reissue, the promo, a foreign copy — and they carry different tracklists and different prices. When there's more than one, Crate shows them all and files nothing until you choose. A queued scan waits as <i>pick one</i> until you tap it, so nothing is lost if you're busy.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
     <p class="hint"><b>BPM and key are yours to enter.</b> No database covers 90s 12"s properly, so open a record and type them in per track — or hit Tap along with the record and Crate works the tempo out. Keys use the Camelot wheel, with the musical key shown next to each one.</p>
