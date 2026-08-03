@@ -296,7 +296,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.28';
+const APP_VERSION = '0.12.29';
 
 const mem = {};
 const store = {
@@ -2481,8 +2481,10 @@ function openSheet(uid){
     ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>`
       <div class="ed">
         <div class="top">
-          <b>${esc(t.pos || (i+1))}</b>
-          <span>${t.artist ? esc(t.artist)+' — ' : ''}${esc(t.title || 'Untitled')}</span>
+          <input type="text" class="tPos" data-i="${i}" value="${esc(t.pos || '')}"
+                 placeholder="${i+1}" aria-label="Position" spellcheck="false">
+          <input type="text" class="tTitle" data-i="${i}" value="${esc(t.title || '')}"
+                 placeholder="Track title" aria-label="Track title">
           <span>${esc(t.dur||'')}</span>
         </div>
         <div class="bot">
@@ -2494,6 +2496,8 @@ function openSheet(uid){
              target="_blank" rel="noopener" title="Find this track on YouTube Music">Play</a>` : ''}
         </div>
         <div class="gen">
+          <input type="text" class="tArt" data-i="${i}" placeholder="Artist — blank if same"
+                 value="${esc(t.artist || '')}" aria-label="Track artist">
           <input type="text" class="tGen" data-i="${i}" list="genreOpts"
                  placeholder="Genre" value="${esc(t.genre || '')}">
         </div>
@@ -2553,6 +2557,40 @@ function openSheet(uid){
   document.querySelectorAll('#sheetBody .tKey').forEach(sel => {
     sel.onchange = e => {
       tracksOf()[+e.target.dataset.i].key = e.target.value || '';
+      save(); renderAll();
+    };
+  });
+  /* Position, title and artist, editable in place. Written on change
+     rather than per keystroke, so renderAll() isn't run mid-word.
+
+     A title is never allowed to end up empty: mergeTracks matches an
+     existing track to a fresh Discogs one by title first, and the Play
+     link only renders when there is one, so a nameless track quietly
+     loses both. An emptied box falls back to "Untitled". */
+  document.querySelectorAll('#sheetBody .tTitle').forEach(inp => {
+    inp.onchange = e => {
+      const t = tracksOf()[+e.target.dataset.i];
+      t.title = e.target.value.trim() || 'Untitled';
+      e.target.value = t.title;
+      save(); renderAll();
+    };
+  });
+  /* Uppercased because sides are written A1, B2 — and because 'a1' and
+     'A1' sorting as different positions would be a nasty surprise. */
+  document.querySelectorAll('#sheetBody .tPos').forEach(inp => {
+    inp.onchange = e => {
+      const t = tracksOf()[+e.target.dataset.i];
+      t.pos = e.target.value.trim().toUpperCase();
+      e.target.value = t.pos;
+      save(); renderAll();
+    };
+  });
+  /* Blank means "same as the record", which is what Discogs' own data
+     means by an empty track artist — so clearing it is a real answer,
+     not a missing one. */
+  document.querySelectorAll('#sheetBody .tArt').forEach(inp => {
+    inp.onchange = e => {
+      tracksOf()[+e.target.dataset.i].artist = e.target.value.trim();
       save(); renderAll();
     };
   });
