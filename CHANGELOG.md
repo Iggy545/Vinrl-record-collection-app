@@ -4,6 +4,12 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.28 - 2026-08-03 11:33
+
+Automatic sync - 1 file changed
+
+- Modified `index.html` (+5/-11)
+
 ## 0.12.27 - 2026-08-03 11:26
 
 Automatic sync - 1 file changed
