@@ -107,6 +107,7 @@
       <option value="value">Value high–low</option>
       <option value="label">Label</option>
       <option value="genre">Genre A–Z</option>
+      <option value="track">Track A–Z</option>
       <option value="bpm">BPM low–high</option>
       <option value="keybpm">Key, then BPM</option>
       <option value="bpmkey">BPM, then key</option>
@@ -295,7 +296,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.26';
+const APP_VERSION = '0.12.27';
 
 const mem = {};
 const store = {
@@ -1008,6 +1009,13 @@ function relKey(it){
    the same rule the filter and the DJ sheet use, so a track nobody has
    typed up yet still sorts and exports under something sensible. */
 const trackGenre = (t, it) => (t && t.genre) || ((it && it.genres) || [])[0] || '';
+/* A record has no single track title, so in the sleeve view it sorts by
+   its earliest one alphabetically — the track that would head the list
+   if you opened it. The track view uses the track's own title. */
+function relTrackTitle(it){
+  const ts = (it.tracks||[]).map(t => String((t && t.title) || '').trim()).filter(Boolean);
+  return ts.length ? ts.slice().sort((a,b) => a.localeCompare(b))[0] : '';
+}
 /* A release's genre for sorting: the first one actually typed on a
    track, else what Discogs called the record. */
 function relGenre(it){
@@ -2105,6 +2113,13 @@ function visible(){
       if(!ga !== !gb) return ga ? -1 : 1;
       return ga.localeCompare(gb) || String(a.artist||'').localeCompare(String(b.artist||''));
     },
+    /* Blanks last again — a record with no tracklist yet has no title to
+       sort on, and belongs at the end rather than the top. */
+    track:(a,b)=>{
+      const ta = relTrackTitle(a), tb = relTrackTitle(b);
+      if(!ta !== !tb) return ta ? -1 : 1;
+      return ta.localeCompare(tb) || String(a.artist||'').localeCompare(String(b.artist||''));
+    },
     bpm:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9),
     keybpm:(a,b)=> keyRank(relKey(a)) - keyRank(relKey(b)) || (relBpm(a)??1e9) - (relBpm(b)??1e9),
     bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b))
@@ -2139,6 +2154,14 @@ function visibleTracks(){
       if(!ga !== !gb) return ga ? -1 : 1;
       return ga.localeCompare(gb)
              || String(a.it.artist||'').localeCompare(String(b.it.artist||'')) || a.i - b.i;
+    },
+    /* The track's own title here — this is the surface where you are
+       actually hunting for a tune by name. */
+    track:(a,b)=>{
+      const ta = String(a.t.title||'').trim(), tb = String(b.t.title||'').trim();
+      if(!ta !== !tb) return ta ? -1 : 1;
+      return ta.localeCompare(tb)
+             || String(a.it.artist||'').localeCompare(String(b.it.artist||''));
     },
     bpm:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9),
     keybpm:(a,b)=> keyRank(a.t.key) - keyRank(b.t.key) || (a.t.bpm||1e9) - (b.t.bpm||1e9),
