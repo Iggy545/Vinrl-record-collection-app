@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.32';
+const APP_VERSION = '0.12.33';
 
 const mem = {};
 const store = {
@@ -2978,6 +2978,45 @@ document.addEventListener('keydown', e => { if(e.key==='Escape') closeSheet(); }
 $('#btnSaveTok').onclick = () => { DB.token = $('#tok').value.trim(); DB.curr = $('#curr').value; save(); toast('Saved'); };
 $('#btnSaveBpmKey').onclick = () => { DB.bpmKey = $('#bpmKey').value.trim(); save(); toast(DB.bpmKey ? 'Key saved' : 'Key cleared'); };
 $('#curr').onchange = () => { DB.curr = $('#curr').value; save(); renderAll(); };
+/* Deliberately does not go through fromGetSongBpm() — that returns null for
+   every kind of failure alike, which is exactly what makes a dud key hard to
+   spot. This reads the status and the body so the three that look identical
+   from the outside can be told apart: not activated yet, wrong key, and a key
+   that works but had nothing for the test track. */
+$('#btnTestBpmKey').onclick = async () => {
+  DB.bpmKey = $('#bpmKey').value.trim(); save();
+  const out = $('#bpmKeyState');
+  const say = (c, t) => out.innerHTML = '<span style="color:var(--'+c+')">'+esc(t)+'</span>';
+  if(!DB.bpmKey){ say('warn', 'No key saved. Paste one above first.'); return; }
+  out.textContent = 'Checking…'; spin(true);
+  try{
+    const u = 'https://api.getsong.co/search/?api_key=' + encodeURIComponent(DB.bpmKey) +
+              '&type=both&lookup=' + encodeURIComponent('song:Billie Jean artist:Michael Jackson');
+    const res = await fetch(u);
+    let j = null; try{ j = await res.json(); }catch(e){}
+    const err = j && (j.error || (j.search && j.search.error)) || '';
+    if(res.status === 401 || /invalid|inactive/i.test(err)){
+      /* the single most likely cause, and it looks just like a typo'd key */
+      say('bad', 'Key rejected — “' + (err || 'unauthorised') + '”. A new key has to be activated from the link GetSongBPM email you before it will answer.');
+    }else if(!res.ok){
+      say('bad', 'GetSongBPM answered ' + res.status + '. Have another go in a minute.');
+    }else if(Array.isArray(j && j.search) && j.search.length){
+      const h = j.search[0];
+      const bits = [h.tempo ? h.tempo + ' bpm' : '', openKeyToCamelot(h.open_key) || ''].filter(Boolean).join(' · ');
+      say('ok', 'Working. It found “' + [h.artist && h.artist.name, h.title].filter(Boolean).join(' — ') + '”' + (bits ? ' at ' + bits : '') + '.');
+    }else if(/no result/i.test(err)){
+      /* auth got through, so the key is fine — the catalogue just missed */
+      say('warn', 'Key accepted, but the test track came back empty. Odd, though the key itself is working.');
+    }else{
+      say('warn', 'Key accepted, but the answer was not a shape this app knows.');
+    }
+  }catch(e){
+    /* a blocked or offline request looks the same as a CORS refusal here.
+       friendly() is no use — every one of its messages names Discogs. */
+    say('bad', 'Could not reach GetSongBPM. Check the connection — ' + e.message);
+  }
+  spin(false);
+};
 $('#btnTest').onclick = async () => {
   DB.token = $('#tok').value.trim(); DB.curr = $('#curr').value; save();
   $('#tokState').textContent = 'Checking…'; spin(true);

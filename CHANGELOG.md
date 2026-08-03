@@ -4,6 +4,22 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.33 - 2026-08-03 22:45
+
+Add a Test it button for the GetSongBPM API key in Setup
+
+Mirrors the Discogs token test. Saves the typed key, then calls
+api.getsong.co with a known track and reports what came back.
+
+It reads the status and body rather than going through
+fromGetSongBpm(), which returns null for every failure alike. That
+separates the three states that otherwise look identical: a key that
+has not been activated from its email link yet, a wrong key, and a
+working key that simply had no data for the track.
+
+- Modified `app.js` (+39/-0)
+- Modified `index.html` (+2/-0)
+
 ## 0.12.32 - 2026-08-03 21:20
 
 Split app.js out of index.html; version the asset URLs

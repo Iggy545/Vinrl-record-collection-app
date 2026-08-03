@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=0.12.32">
+<link rel="stylesheet" href="styles.css?v=0.12.33">
 </head>
 <body>
 
@@ -205,7 +205,9 @@
     <input type="text" id="bpmKey" placeholder="optional" autocomplete="off" spellcheck="false">
     <div style="margin-top:14px" class="row">
       <button class="btn" id="btnSaveBpmKey">Save key</button>
+      <button class="btn quiet" id="btnTestBpmKey">Test it</button>
     </div>
+    <p class="hint" id="bpmKeyState"></p>
     <p class="hint" style="margin-bottom:0">Tempo and key data by
       <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a>
       and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
@@ -287,6 +289,6 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
 <div id="toast" role="status"></div>
 
-<script src="app.js?v=0.12.32"></script>
+<script src="app.js?v=0.12.33"></script>
 </body>
 </html>
