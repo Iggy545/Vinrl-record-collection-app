@@ -296,7 +296,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.29';
+const APP_VERSION = '0.12.30';
 
 const mem = {};
 const store = {
@@ -2428,8 +2428,16 @@ function openLocator(uid){
 
 /* ── detail sheet ─────────────────────────────────────────── */
 let openUid = null;
+/* Position, title and artist start locked. BPM, key and genre do not —
+   those are the boxes you actually work in, and gating them behind a
+   toggle would put a tap in front of every tempo you type. */
+let trackEdit = false;
 function openSheet(uid){
   const it = DB.items.find(x => x.uid === uid); if(!it) return;
+  /* Only a DIFFERENT record starts locked again. The sheet is rebuilt in
+     place after adding a track or changing a grade, and re-locking there
+     would drop you out of editing mid-job. */
+  if(openUid !== uid) trackEdit = false;
   openUid = uid;
   showHere(uid);            /* light up the crate this one lives in */
   const v = itemValue(it);
@@ -2476,15 +2484,21 @@ function openSheet(uid){
     <label class="f" for="sNotes">Notes</label>
     <textarea id="sNotes" rows="2" placeholder="Runout etching, sleeve creasing, who you bought it from…">${esc(it.notes)}</textarea>
 
-    <div class="eyebrow">Tracklist · BPM, key &amp; genre</div>
+    <div class="shelfhead" style="margin:20px 0 8px">
+      <div class="eyebrow">Tracklist · BPM, key &amp; genre</div>
+      <div class="spacer"></div>
+      <button class="ghost" id="sTrackEdit">${trackEdit ? 'done' : 'edit details'}</button>
+    </div>
     <datalist id="genreOpts">${genreList().map(g=>`<option value="${esc(g)}">`).join('')}</datalist>
     ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>`
       <div class="ed">
         <div class="top">
           <input type="text" class="tPos" data-i="${i}" value="${esc(t.pos || '')}"
-                 placeholder="${i+1}" aria-label="Position" spellcheck="false">
+                 placeholder="${i+1}" aria-label="Position" spellcheck="false"
+                 ${trackEdit ? '' : 'readonly'}>
           <input type="text" class="tTitle" data-i="${i}" value="${esc(t.title || '')}"
-                 placeholder="Track title" aria-label="Track title">
+                 placeholder="Track title" aria-label="Track title"
+                 ${trackEdit ? '' : 'readonly'}>
           <span>${esc(t.dur||'')}</span>
         </div>
         <div class="bot">
@@ -2497,7 +2511,8 @@ function openSheet(uid){
         </div>
         <div class="gen">
           <input type="text" class="tArt" data-i="${i}" placeholder="Artist — blank if same"
-                 value="${esc(t.artist || '')}" aria-label="Track artist">
+                 value="${esc(t.artist || '')}" aria-label="Track artist"
+                 ${trackEdit ? '' : 'readonly'}>
           <input type="text" class="tGen" data-i="${i}" list="genreOpts"
                  placeholder="Genre" value="${esc(t.genre || '')}">
         </div>
@@ -2567,8 +2582,11 @@ function openSheet(uid){
      existing track to a fresh Discogs one by title first, and the Play
      link only renders when there is one, so a nameless track quietly
      loses both. An emptied box falls back to "Untitled". */
+  $('#sTrackEdit').onclick = () => { trackEdit = !trackEdit; openSheet(uid); };
+
   document.querySelectorAll('#sheetBody .tTitle').forEach(inp => {
     inp.onchange = e => {
+      if(!trackEdit) return;        /* readonly is the widget; this is the rule */
       const t = tracksOf()[+e.target.dataset.i];
       t.title = e.target.value.trim() || 'Untitled';
       e.target.value = t.title;
@@ -2579,6 +2597,7 @@ function openSheet(uid){
      'A1' sorting as different positions would be a nasty surprise. */
   document.querySelectorAll('#sheetBody .tPos').forEach(inp => {
     inp.onchange = e => {
+      if(!trackEdit) return;
       const t = tracksOf()[+e.target.dataset.i];
       t.pos = e.target.value.trim().toUpperCase();
       e.target.value = t.pos;
@@ -2590,6 +2609,7 @@ function openSheet(uid){
      not a missing one. */
   document.querySelectorAll('#sheetBody .tArt').forEach(inp => {
     inp.onchange = e => {
+      if(!trackEdit) return;
       tracksOf()[+e.target.dataset.i].artist = e.target.value.trim();
       save(); renderAll();
     };

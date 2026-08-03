@@ -345,6 +345,11 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 /* Position and title are inputs now. The <b> and span rules above stay:
    the tempo-lookup review panel reuses .ed .top with plain text, so
    removing them would strip its styling. */
+/* Locked, the fields read as plain text: the row looks like a tracklist
+   rather than a form, and a stray tap while scrolling a long sheet
+   cannot rename a track. "edit details" gives them their boxes back. */
+.ed input[readonly]{border-color:transparent;background:transparent;cursor:default}
+.ed .top input[readonly]{padding-left:0;padding-right:0}
 .ed .top .tPos{flex:0 0 48px;padding:6px 4px;text-align:center;font-size:12px;
   color:var(--sticker);font-weight:700}
 .ed .top .tTitle{flex:1;min-width:0;padding:6px 8px;font-size:12.5px}
