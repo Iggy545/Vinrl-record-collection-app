@@ -284,11 +284,27 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 
 .filterbar{background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);
   padding:12px;margin:10px 0}
-.filterbar .lane{display:flex;gap:8px;align-items:center}
+.filterbar .lane{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .filterbar .lane+.lane{margin-top:8px}
 .filterbar .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--dust);flex:0 0 44px}
 .filterbar input,.filterbar select{padding:9px 8px;font-size:13px}
+/* Every control in a lane shares the row on the same terms. Without this the
+   global `width:100%` gives the two BPM boxes a flex-basis of the whole lane
+   each, so the lane is always over-subscribed — and #keyFilter, whose inline
+   flex sets a basis of 0, contributes nothing to shrinking and so never gets
+   any width back. It collapsed to its chevron, 18px, with no way to pick a
+   key at all. The wider the window the worse it got. `min-width:0` is the
+   half that matters: without it a select still refuses to go below its
+   longest option. */
+.filterbar .lane input,.filterbar .lane select{flex:1 1 0;min-width:0;width:auto}
+/* the key is the point of this lane, so it gets the room the numbers don't need */
+.filterbar .lane #bpmMin,.filterbar .lane #bpmMax{flex:0 1 88px}
+/* A real basis rather than 0, so on a phone the key drops to its own line
+   instead of sharing one three ways and ending up too narrow to read
+   "12A · Db min". It is the only control in the bar with a non-zero basis,
+   so it is the only one that can wrap — the other lanes are unaffected. */
+.filterbar .lane #keyFilter{flex:1 1 130px}
 .check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dust);
   font-family:var(--mono);cursor:pointer;margin-top:9px}
 .check input{width:16px;height:16px;flex:0 0 16px;accent-color:var(--sticker)}

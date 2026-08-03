@@ -4,6 +4,29 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.34 - 2026-08-03 23:01
+
+Fix the key filter collapsing to its chevron, so a key can be picked
+
+The Any key dropdown in the BPM lane was rendering 18px wide on a desktop
+window - all 25 options present, but no visible control, so there was no way
+to choose a key and the harmonically-compatible tick had nothing to work
+from. The wider the window, the narrower it got.
+
+Cause: the global width:100% on inputs gave both BPM boxes a flex-basis of
+the whole lane, so the row was always over-subscribed, while the key
+select's inline flex:1.3 set its basis to 0. A basis-0 item contributes
+nothing to shrink distribution, so it never got any width back and fell to
+min-content.
+
+The lane now sizes all three controls on the same terms, the BPM boxes take
+88px, and the key select has a real basis so it drops to its own line on a
+phone rather than sharing one three ways. Readable at every width from 320
+to 1440.
+
+- Modified `index.html` (+1/-1)
+- Modified `styles.css` (+17/-1)
+
 ## 0.12.33 - 2026-08-03 22:45
 
 Add a Test it button for the GetSongBPM API key in Setup
