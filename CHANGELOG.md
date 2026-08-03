@@ -4,6 +4,31 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.32 - 2026-08-03 21:20
+
+Split app.js out of index.html; version the asset URLs
+
+- The script block is now app.js, byte-identical to what was inside the tag
+  (170,246 bytes in and out). index.html is 293 lines of markup only.
+- sync.ps1 stamps APP_VERSION into app.js, not index.html, and rewrites the
+  app.js?v= and styles.css?v= query strings in the same pass. All three files
+  are cached independently at max-age=600, so without that a fresh index.html
+  could pull a stale app.js and the two would disagree about the markup.
+- The update check read APP_VERSION out of the live index.html, which no
+  longer holds it. It reads the app.js?v= reference instead: the authoritative
+  pairing, and a far smaller download now index.html is markup only.
+- Scan screen hint still promised the old camera behaviour (queues silently,
+  no asking). Rewritten to match the picker. The help sheet was already done.
+
+Verified against a fingerprint taken before the move: 107 global functions
+unchanged, 11 sort orders identical in both views, DOM shape and styling
+unchanged, no console errors. Version stamping proved end to end in a
+throwaway repo, and the update check covered by 7 checks.
+
+- Added `app.js` (+3507/-0)
+- Modified `index.html` (+3/-3504)
+- Modified `scripts/sync.ps1` (+24/-2)
+
 ## 0.12.31 - 2026-08-03 20:55
 
 Pick the pressing on camera scans; label sort blanks-last; range-check looked-up tempos

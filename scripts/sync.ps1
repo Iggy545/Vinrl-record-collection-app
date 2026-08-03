@@ -226,13 +226,35 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 # Stamp the version into the app itself, so a device can be asked which
 # build it is running. Without this a stale cached page is indistinguishable
 # from a current one.
-$appFile = Join-Path $repo 'index.html'
+#
+# APP_VERSION lives in app.js, NOT index.html — the script block was lifted
+# out on 2026-08-03. If it ever moves again, this block moves with it in the
+# same turn or version stamping breaks silently.
+$appFile = Join-Path $repo 'app.js'
 if (Test-Path $appFile) {
     $app = [System.IO.File]::ReadAllText($appFile)
     $stamped = [regex]::Replace($app, "const APP_VERSION = '[^']*';", "const APP_VERSION = '$next';", 1)
     if ($stamped -ne $app) {
         [System.IO.File]::WriteAllText($appFile, $stamped, $utf8)
-        Write-Info "Stamped v$next into index.html"
+        Write-Info "Stamped v$next into app.js"
+    }
+}
+
+# Version the asset URLs in the same pass. index.html, app.js and styles.css
+# are cached independently at max-age=600, so without this a freshly loaded
+# index.html could pull a ten-minute-stale app.js and the two would disagree
+# about what the markup contains. A version in the query string means a new
+# index.html can only ever load the app.js and styles.css released with it.
+# The update check reads this same "app.js?v=" as the live version, so the
+# two cannot drift apart.
+$idxFile = Join-Path $repo 'index.html'
+if (Test-Path $idxFile) {
+    $idx = [System.IO.File]::ReadAllText($idxFile)
+    $bumped = $idx -replace 'app\.js\?v=[^"'']*', "app.js?v=$next"
+    $bumped = $bumped -replace 'styles\.css\?v=[^"'']*', "styles.css?v=$next"
+    if ($bumped -ne $idx) {
+        [System.IO.File]::WriteAllText($idxFile, $bumped, $utf8)
+        Write-Info "Pointed index.html at v$next assets"
     }
 }
 
