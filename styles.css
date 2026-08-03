@@ -1,0 +1,403 @@
+/* ── tokens ───────────────────────────────────────────────── */
+:root{
+  --ink:#141019;        /* deep sleeve black, violet cast */
+  --wax:#1d1826;        /* raised surface */
+  --groove:#2b2436;     /* borders, grooves */
+  --dust:#8a819c;       /* muted text */
+  --card:#ece6da;       /* sleeve cardstock — text colour */
+  --sticker:#ff5f1f;    /* fluorescent price sticker */
+  --sticker-ink:#2a0f00;
+  --ok:#7de0b0;
+  --warn:#ffd24a;
+  --bad:#ff6b6b;
+  --display:"Space Grotesk",system-ui,-apple-system,sans-serif;
+  --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:10px;
+  --shadow:0 14px 40px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--ink);
+  color:var(--card);
+  font-family:var(--display);
+  font-size:16px;line-height:1.45;
+  padding-bottom:calc(72px + env(safe-area-inset-bottom));
+  overscroll-behavior-y:none;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+a{color:var(--sticker)}
+:focus-visible{outline:2px solid var(--sticker);outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{height:6px;width:6px}
+::-webkit-scrollbar-thumb{background:var(--groove);border-radius:3px}
+
+/* ── header ───────────────────────────────────────────────── */
+header{
+  position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;gap:12px;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;
+  background:linear-gradient(var(--ink) 70%,transparent);
+}
+.disc{width:26px;height:26px;border-radius:50%;flex:none;
+  background:
+    radial-gradient(circle at 50% 50%, var(--sticker) 0 14%, var(--ink) 14.5% 20%,
+    var(--groove) 20.5% 22%, var(--wax) 22.5% 32%, var(--groove) 32.5% 34%,
+    var(--wax) 34.5% 46%, var(--groove) 46.5% 48%, var(--wax) 48.5% 100%);
+  animation:spin 3.2s linear infinite;animation-play-state:paused}
+.disc.on{animation-play-state:running}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wordmark{font-weight:700;letter-spacing:.22em;text-transform:uppercase;font-size:15px}
+.wordmark span{color:var(--dust);letter-spacing:.1em;font-weight:400}
+/* The running version, in the bar rather than only at the foot of Setup.
+   A cached page looks identical to a fresh one, so this is the first
+   thing worth reading when something behaves oddly. Mono and small so it
+   sits under the wordmark's tracking rather than competing with it. */
+.wordmark .ver{font-family:var(--mono);font-size:10px;letter-spacing:.04em;
+  text-transform:none;color:var(--dust);font-weight:400;white-space:nowrap;
+  padding:0;cursor:default}
+.wordmark .ver[disabled]{opacity:1}          /* disabled only means "not tappable" here */
+/* A newer build is live. Orange because it is the one thing in the bar
+   worth acting on, and because a cached page is otherwise identical to a
+   fresh one — which has cost real time to diagnose before. */
+.wordmark .ver.upd{color:var(--sticker);cursor:pointer;text-decoration:underline;
+  text-underline-offset:3px}
+header .spacer{flex:1}
+.ghost{font-family:var(--mono);font-size:11px;color:var(--dust);
+  border:1px solid var(--groove);padding:6px 10px;border-radius:99px}
+.ghost:hover{color:var(--card);border-color:var(--dust)}
+
+main{padding:0 16px}
+.view{display:none}
+.view.on{display:block;animation:rise .28s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ── shared bits ──────────────────────────────────────────── */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dust);margin:26px 0 10px}
+.panel{background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);padding:16px}
+.btn{background:var(--sticker);color:var(--sticker-ink);font-weight:700;
+  padding:14px 18px;border-radius:var(--r);letter-spacing:.02em;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%}
+.btn:active{transform:translateY(1px)}
+.btn.quiet{background:transparent;color:var(--card);border:1px solid var(--groove);font-weight:500}
+.btn.quiet:hover{border-color:var(--dust)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+label.f{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust);margin:14px 0 6px}
+input[type=text],input[type=number],input[type=search],
+input[type=email],input[type=password],select,textarea{
+  width:100%;background:var(--ink);border:1px solid var(--groove);
+  border-radius:8px;padding:12px;font-family:var(--mono);font-size:14px}
+input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none}
+.hint{font-size:13px;color:var(--dust);line-height:1.5}
+
+/* ── scanner ──────────────────────────────────────────────── */
+#stage{position:relative;background:#000;border:1px solid var(--groove);
+  border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;display:none}
+#stage.on{display:block}
+#video{width:100%;height:100%;object-fit:cover;display:block}
+.reticle{position:absolute;inset:18% 10%;border:2px solid rgba(255,95,31,.9);
+  border-radius:6px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+/* reading a whole cover wants the full frame, not the barcode slot */
+#stage.wide .reticle{inset:4%}
+.reticle::after{content:"";position:absolute;left:0;right:0;height:2px;
+  background:var(--sticker);box-shadow:0 0 12px var(--sticker);
+  animation:sweep 2.2s ease-in-out infinite}
+@keyframes sweep{0%,100%{top:4%}50%{top:96%}}
+.stage-note{position:absolute;left:0;right:0;bottom:0;padding:8px 12px;
+  font-family:var(--mono);font-size:11px;background:rgba(0,0,0,.6);color:var(--card)}
+
+/* ── queue ────────────────────────────────────────────────── */
+.q{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--groove)}
+.q:last-child{border-bottom:0}
+.q .code{font-family:var(--mono);font-size:13px}
+.q .st{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dust)}
+.q.done .st{color:var(--ok)}
+.q.miss .st{color:var(--bad)}
+
+/* ── stats strip ──────────────────────────────────────────── */
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+  background:var(--groove);border:1px solid var(--groove);border-radius:var(--r);overflow:hidden}
+.strip div{background:var(--wax);padding:14px 10px;text-align:center}
+.strip b{display:block;font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:-.02em}
+.strip small{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust)}
+
+/* ── THE CRATE (signature) ────────────────────────────────── */
+.crate-rail{position:relative;margin:0 -16px;padding:0 16px}
+/* The top padding is headroom, not decoration: overflow-x:auto makes the
+   vertical axis clip too, so a record lifted out of the crate is cut off
+   without room above it to rise into. */
+.crate{display:flex;gap:3px;overflow-x:auto;scroll-snap-type:x proximity;
+  padding:60px 16px 26px;margin:0 -16px;
+  background:
+    linear-gradient(180deg,transparent 0 18px,#0d0a11 18px 100%);
+  border-top:1px solid var(--groove);border-bottom:1px solid var(--groove)}
+.spine{flex:none;width:26px;height:184px;scroll-snap-align:center;
+  border-radius:2px 2px 0 0;position:relative;overflow:hidden;
+  box-shadow:inset -3px 0 6px rgba(0,0,0,.5), 0 -3px 8px rgba(0,0,0,.4);
+  transition:transform .18s ease,width .18s ease}
+.spine:hover,.spine:focus-visible{transform:translateY(-14px)}
+.spine .txt{position:absolute;bottom:8px;left:50%;transform:translateX(-50%) rotate(180deg);
+  writing-mode:vertical-rl;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  white-space:nowrap;max-height:168px;overflow:hidden;text-overflow:ellipsis;
+  color:rgba(255,255,255,.92);text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.spine .tab{position:absolute;top:0;left:0;right:0;height:5px;background:rgba(255,255,255,.25)}
+.crate-empty{padding:34px 16px;text-align:center;color:var(--dust);font-size:14px}
+
+/* ── choosing which Discogs pressing you actually own ─────── */
+.picklist{display:flex;flex-direction:column;gap:8px;max-height:56vh;overflow-y:auto;
+  margin:0 -2px;padding:0 2px}
+.pick{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);padding:8px}
+.pick:hover{border-color:var(--dust)}
+.pick img,.pick .noimg{width:50px;height:50px;flex:none;border-radius:4px;object-fit:cover;
+  background:var(--ink);border:1px solid var(--groove);display:block}
+.pick .who{min-width:0;flex:1}
+.pick .who b{font-size:13.5px;font-weight:500;line-height:1.3;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.pick .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.pick .add{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  font-weight:700;color:var(--sticker-ink);background:var(--sticker);
+  padding:6px 9px;border-radius:4px;flex:none}
+.pick .have{position:static;transform:none;flex:none;background:var(--groove);color:var(--dust);
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:4px 6px;border-radius:3px;
+  letter-spacing:.08em}
+/* The rail keeps scrolling normally while arranging — you tap to lift a
+   record and tap again to place it, so the finger is never held down. */
+.crate.editing .spine{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.crate.editing .spine:hover{transform:none}
+.spine.drag{animation:none;transform:translateY(-14px);z-index:5;cursor:grabbing;
+  outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
+/* lifted out of the crate, waiting to be put somewhere */
+.spine.picked{animation:none;transform:translateY(-20px);z-index:6;
+  outline:2px solid var(--sticker);outline-offset:1px;box-shadow:var(--shadow)}
+/* Pulled half out of the crate so you can see what it actually is. A
+   26px sliver of a sleeve is unreadable, so it widens as it rises —
+   which is what the width transition on .spine was always for. Cream,
+   like the shelf tile, since orange already means lifted for a move and
+   green means ticked for a bulk one. */
+.spine.here{transform:translateY(-38px);width:86px;z-index:7;
+  outline:2px solid var(--card);outline-offset:1px;box-shadow:var(--shadow)}
+.spine .pop{position:absolute;left:0;top:0;width:100%;height:86px;
+  object-fit:cover;display:block}
+.spine .txt{transition:opacity .18s ease}
+.spine.here.hasart .txt{opacity:0}
+.rec.picked{animation:none}
+.rec.picked .sleeve{outline:2px solid var(--sticker);outline-offset:3px}
+.rec.picked h4{color:var(--sticker)}
+/* ticked for a bulk move. Green, not orange, so a set of forty waiting to
+   be re-filed never reads as one record lifted out of the crate. */
+.spine.sel{animation:none;transform:translateY(-10px);
+  outline:2px solid var(--ok);outline-offset:1px}
+.spine.sel .tab{background:var(--ok)}
+.rec.sel{animation:none}
+.rec.sel .sleeve{outline:2px solid var(--ok);outline-offset:3px}
+.rec.sel .sleeve::after{content:'✓';position:absolute;top:6px;left:6px;
+  width:21px;height:21px;border-radius:50%;background:var(--ok);color:var(--ink);
+  font-size:12px;font-weight:700;display:grid;place-items:center}
+.selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-2px 0 12px}
+.selbar .ghost{flex:none}
+.ghost:disabled{opacity:.38;pointer-events:none}
+
+/* ── grid ─────────────────────────────────────────────────── */
+.tools{display:flex;gap:8px;margin:14px 0}
+.tools input{flex:2}
+.tools select{flex:1;padding:12px 8px}
+.tools #sortDir{flex:0 0 42px;padding:0;font-size:15px;line-height:1}
+.tools #sortDir[aria-pressed="true"]{color:var(--sticker);border-color:var(--sticker)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:14px;margin-bottom:24px}
+.rec{position:relative;text-align:left}
+.sleeve{aspect-ratio:1;background:var(--wax);border:1px solid var(--groove);
+  border-radius:4px;overflow:hidden;position:relative}
+.sleeve img{width:100%;height:100%;object-fit:cover;display:block}
+.sleeve .noart{position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10px;color:var(--dust);text-align:center;padding:8px}
+.tagsticker{position:absolute;right:-6px;top:-6px;background:var(--sticker);
+  color:var(--sticker-ink);font-family:var(--mono);font-weight:700;font-size:11px;
+  padding:4px 7px;border-radius:3px;transform:rotate(-7deg);
+  box-shadow:0 3px 8px rgba(0,0,0,.5)}
+.rec h4{margin:8px 0 1px;font-size:13.5px;font-weight:500;line-height:1.25;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.rec p{margin:0;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dupe{position:absolute;left:6px;top:6px;background:var(--warn);color:#2a1f00;
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 5px;border-radius:2px}
+
+/* ── shelves, each its own crate ──────────────────────────── */
+.shelfhead{display:flex;align-items:center;gap:10px;margin:26px 0 10px}
+.shelfhead .eyebrow{margin:0;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.shelfhead .ghost{flex:none}
+.shelfhead .spacer{flex:1}
+.shelfGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.shelfTile{background:var(--wax);border:1px solid var(--groove);border-radius:14px;
+  padding:9px 9px 7px;cursor:pointer;touch-action:manipulation;
+  transition:border-color .15s ease}
+.shelfTile:hover{border-color:var(--dust)}
+.shelfTile.on{border-color:var(--sticker)}
+/* "the record you have open lives in this crate" — deliberately neither
+   the orange of .on, which means the filter is set to this shelf, nor
+   the green of a bulk-move tick. A third state needs a third look. */
+.shelfTile.here{outline:2px solid var(--card);outline-offset:2px;
+  box-shadow:0 0 20px rgba(236,230,218,.20)}
+.shelfTile.here .name{color:var(--card);font-weight:700}
+.shelfTile .art{position:relative;height:76px;border-radius:7px;overflow:hidden;
+  background:var(--ink);box-shadow:inset 0 2px 12px rgba(0,0,0,.6)}
+.shelfTile .spines{display:flex;gap:2px;height:100%;padding:5px 4px}
+.shelfTile .spines i{flex:1;min-width:2px;border-radius:1px;display:block}
+.shelfTile .count{position:absolute;inset:0;display:grid;place-items:center}
+.shelfTile .count b{background:rgba(20,16,25,.82);border:1px solid var(--groove);
+  border-radius:7px;padding:3px 9px;font-family:var(--mono);font-size:13px;
+  font-weight:700;color:var(--card)}
+.shelfTile .name{margin-top:7px;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shelfTile.empty .art{opacity:.4}
+.grid.editing .rec{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.grid.editing .rec .sleeve{outline:1px dashed var(--dust);outline-offset:2px}
+.rec.drag{animation:none;opacity:.92;position:relative;z-index:5;cursor:grabbing}
+.rec.drag .sleeve{outline:2px solid var(--sticker);outline-offset:2px}
+.shelfGrid.editing .shelfTile{cursor:grab;animation:jiggle .8s ease-in-out infinite}
+.shelfGrid.editing .shelfTile .name::after{content:' ⠿';color:var(--sticker)}
+.shelfTile.drag{animation:none;transform:scale(1.06);opacity:.92;position:relative;z-index:5;
+  border-color:var(--sticker);box-shadow:var(--shadow);cursor:grabbing}
+/* a record is hovering over this shelf and will land on it if dropped */
+.shelfTile.droptarget{border-color:var(--sticker)}
+.shelfTile.droptarget .art{box-shadow:inset 0 0 0 2px var(--sticker)}
+.shelfTile.droptarget .name{color:var(--sticker)}
+@keyframes jiggle{0%,100%{transform:rotate(-.6deg)}50%{transform:rotate(.6deg)}}
+@media (prefers-reduced-motion:reduce){
+  .shelfGrid.editing .shelfTile,.grid.editing .rec{animation:none}
+  .shelfTile.drag{transform:none}
+}
+
+/* ── view toggle ──────────────────────────────────────────── */
+.toggle{display:flex;gap:1px;background:var(--groove);border:1px solid var(--groove);
+  border-radius:99px;overflow:hidden;margin:14px 0 0}
+.toggle button{flex:1;padding:9px 4px;background:var(--wax);font-family:var(--mono);
+  font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dust)}
+.toggle button.on{background:var(--sticker);color:var(--sticker-ink);font-weight:700}
+
+.filterbar{background:var(--wax);border:1px solid var(--groove);border-radius:var(--r);
+  padding:12px;margin:10px 0}
+.filterbar .lane{display:flex;gap:8px;align-items:center}
+.filterbar .lane+.lane{margin-top:8px}
+.filterbar .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dust);flex:0 0 44px}
+.filterbar input,.filterbar select{padding:9px 8px;font-size:13px}
+.check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dust);
+  font-family:var(--mono);cursor:pointer;margin-top:9px}
+.check input{width:16px;height:16px;flex:0 0 16px;accent-color:var(--sticker)}
+.clearf{font-family:var(--mono);font-size:10.5px;color:var(--sticker);
+  text-transform:uppercase;letter-spacing:.12em;margin-left:auto}
+
+/* ── key badge ────────────────────────────────────────────── */
+.key{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 6px;
+  border-radius:3px;letter-spacing:.02em;white-space:nowrap;
+  background:hsl(var(--kh) 62% 58% / .18);color:hsl(var(--kh) 72% 68%);
+  border:1px solid hsl(var(--kh) 62% 58% / .38)}
+.bpmv{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--card)}
+.bpmv small{font-size:9px;color:var(--dust);font-weight:400;letter-spacing:.1em}
+
+/* ── track list (global) ──────────────────────────────────── */
+.tlist{margin-bottom:24px}
+.trow{display:flex;align-items:center;gap:10px;padding:11px 0;
+  border-bottom:1px solid var(--groove);width:100%;text-align:left}
+.trow .art{width:34px;height:34px;flex:none;border-radius:3px;object-fit:cover;background:var(--ink)}
+.trow .who{min-width:0;flex:1}
+.trow .who b{display:block;font-size:13.5px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .num{display:flex;align-items:center;gap:7px;flex:none}
+/* the shelf code leads the line so it survives the ellipsis — it is the
+   thing you are scanning for when you want to go and pull the record */
+.trow .loc{font-style:normal;font-weight:700;color:var(--sticker)}
+
+/* ── where a record physically sits on its shelf ───────────── */
+.ruler{position:relative;height:28px;border-radius:6px;background:var(--ink);
+  border:1px solid var(--groove);overflow:hidden;margin:12px 0 8px}
+.ruler i{position:absolute;top:0;bottom:0;width:3px;background:var(--sticker);
+  box-shadow:0 0 10px var(--sticker)}
+.ruler b{position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--dust)}
+.neigh{font-family:var(--mono);font-size:11.5px;color:var(--dust);line-height:1.75}
+.neigh b{color:var(--card);font-weight:400}
+.keyhead{display:flex;align-items:baseline;gap:8px;margin:20px 0 2px}
+.keyhead b{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--sticker)}
+.keyhead span{font-family:var(--mono);font-size:10.5px;color:var(--dust)}
+
+/* ── editable tracks in sheet ─────────────────────────────── */
+.ed{border-bottom:1px solid var(--groove);padding:10px 0}
+.ed .top{display:flex;gap:10px;align-items:baseline;font-family:var(--mono);font-size:12.5px}
+.ed .top b{color:var(--sticker);min-width:24px;flex:none}
+.ed .top span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ed .top span:last-child{color:var(--dust);font-size:11px}
+.ed .bot{display:flex;gap:6px;margin-top:7px;align-items:center}
+.ed .bot input[type=number]{flex:0 0 74px;padding:8px;text-align:center}
+.ed .bot select{flex:1;padding:8px}
+/* Genre gets its own line rather than a fifth control on .bot — at 375px
+   the tempo row already fills the width exactly, with nothing to spare. */
+.ed .gen{margin-top:6px}
+.ed .gen input[type=text]{padding:8px;font-size:12.5px}
+.tap{flex:0 0 52px;padding:8px 0;border:1px solid var(--groove);border-radius:8px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dust);text-align:center}
+.ed .bot a.tap{text-decoration:none}
+.tap.live{border-color:var(--sticker);color:var(--sticker)}
+
+/* ── sheet ────────────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(8,5,12,.72);z-index:60;
+  opacity:0;pointer-events:none;transition:opacity .22s}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;max-height:88vh;overflow-y:auto;
+  background:var(--wax);border-top:1px solid var(--groove);
+  border-radius:16px 16px 0 0;box-shadow:var(--shadow);
+  transform:translateY(100%);transition:transform .28s cubic-bezier(.22,1,.36,1);
+  padding:8px 16px calc(28px + env(safe-area-inset-bottom))}
+.sheet.on{transform:none}
+.grip{width:38px;height:4px;border-radius:2px;background:var(--groove);margin:6px auto 14px}
+.sheet-head{display:flex;gap:14px}
+.sheet-head img{width:96px;height:96px;object-fit:cover;border-radius:4px;flex:none;background:var(--ink)}
+.sheet-head h3{margin:0 0 4px;font-size:18px;line-height:1.25}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--dust);line-height:1.7}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  border:1px solid var(--groove);border-radius:99px;padding:4px 10px;color:var(--dust)}
+.tracks{margin:8px 0 0;padding:0;list-style:none;font-family:var(--mono);font-size:12px}
+.tracks li{display:flex;gap:10px;padding:5px 0;border-bottom:1px solid var(--groove)}
+.tracks li b{color:var(--sticker);font-weight:700;min-width:26px}
+.tracks li span:last-child{margin-left:auto;color:var(--dust)}
+
+/* ── stats view ───────────────────────────────────────────── */
+.bar{margin:9px 0}
+.bar .lab{display:flex;font-family:var(--mono);font-size:11.5px;margin-bottom:4px}
+.bar .lab span:last-child{margin-left:auto;color:var(--dust)}
+.bar .track{height:7px;background:var(--groove);border-radius:4px;overflow:hidden}
+.bar .fill{height:100%;background:var(--sticker);border-radius:4px}
+
+/* ── nav ──────────────────────────────────────────────────── */
+nav{position:fixed;left:0;right:0;bottom:0;z-index:50;display:grid;
+  grid-template-columns:repeat(4,1fr);
+  background:rgba(20,16,25,.94);backdrop-filter:blur(14px);
+  border-top:1px solid var(--groove);padding-bottom:env(safe-area-inset-bottom)}
+nav button{padding:12px 4px 14px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--dust);
+  display:flex;flex-direction:column;align-items:center;gap:5px}
+nav button .ic{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
+nav button.on{color:var(--sticker)}
+
+/* ── toast ────────────────────────────────────────────────── */
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));
+  transform:translate(-50%,14px);z-index:80;background:var(--card);color:var(--ink);
+  font-family:var(--mono);font-size:12.5px;padding:10px 16px;border-radius:99px;
+  opacity:0;pointer-events:none;transition:.24s;max-width:90vw;text-align:center}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
