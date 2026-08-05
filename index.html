@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=0.12.34">
+<link rel="stylesheet" href="styles.css?v=0.12.35">
 </head>
 <body>
 
@@ -233,9 +233,11 @@
 
   <div class="eyebrow">Sync across your devices</div>
   <div class="panel">
-    <p class="hint" style="margin-top:0">Keeps this crate the same on your phone, your iPad and this computer.
+    <p class="hint" style="margin-top:0">Keeps this crate the same on your phone and this computer.
       Everything still works offline — sync just mirrors it to your own Firebase project when you're online.
-      Use the <b>same config and login as your POS app</b>; Crate keeps its records in their own place, so the two never mix.</p>
+      You'll need to <b>create the login in the Firebase console first</b> — there's no sign-up here, so a
+      missing account reads as "wrong email or password". If you already run another app on the same Firebase
+      project, reuse its config: Crate keeps its records in their own place, so the two never mix.</p>
     <label class="f" for="syncCfg">Firebase config (paste the whole snippet from your project)</label>
     <textarea id="syncCfg" rows="7" spellcheck="false" placeholder='{
   "apiKey": "...",
@@ -289,6 +291,6 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
 <div id="toast" role="status"></div>
 
-<script src="app.js?v=0.12.34"></script>
+<script src="app.js?v=0.12.35"></script>
 </body>
 </html>

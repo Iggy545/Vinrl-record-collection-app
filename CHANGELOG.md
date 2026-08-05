@@ -4,6 +4,27 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.35 - 2026-08-05 22:01
+
+Sync setup copy no longer assumes the POS app; README describes the three-file split
+
+The Setup panel's sync hint told the user to reuse "the same config and login as
+your POS app", which reads as an instruction to anyone else setting Crate up from
+scratch. It now leads with the step people actually get stuck on â€” the login has
+to be created in the Firebase console first, because there is no sign-up path, so
+a missing account surfaces as "wrong email or password". Reusing another app's
+Firebase project is still mentioned, as an option rather than a requirement. The
+iPad is gone from that line too; only a phone and a PC ever ran the app.
+
+README.md still described Crate as a single file with "HTML, CSS and JS in one
+file", stale since the v0.12.32 split. It now documents the three files, the
+empty assets/css and assets/js placeholders, the versioned-asset cache busting
+that keeps index.html and app.js from drifting apart, and what changes about
+recovering an old version either side of the split.
+
+- Modified `README.md` (+39/-14)
+- Modified `index.html` (+4/-2)
+
 ## 0.12.34 - 2026-08-03 23:01
 
 Fix the key filter collapsing to its chevron, so a key can be picked
