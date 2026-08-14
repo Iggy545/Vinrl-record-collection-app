@@ -4,6 +4,25 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.41 - 2026-08-14 17:11
+
+Clear every You paid in one go, from Setup
+
+New button in Setup under Your data: Clear every You paid. It blanks the field on every
+record in one action, so none of them show an up-or-down line any more.
+
+Blank rather than zero, deliberately. Zero means the record cost you nothing, and every
+sheet would then read as pure profit against a nil cost. Blank means not recorded, which is
+what an empty field has always meant here.
+
+It only counts records that actually have a figure on them, it names that count before it
+does anything, and it leaves grades, prices, tracklists and shelves alone. There is no undo
+for it, so the confirmation says so and points at Export backup - take one first if there is
+any chance you want those figures back.
+
+- Modified `app.js` (+22/-0)
+- Modified `index.html` (+2/-1)
+
 ## 0.12.40 - 2026-08-14 16:47
 
 Show these in the crate: take a saved set to the Crate tab and tap through to each record
@@ -126,7 +145,7 @@ Sync setup copy no longer assumes the POS app; README describes the three-file s
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the login has
+scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The
