@@ -325,6 +325,31 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
    "12A · Db min". It is the only control in the bar with a non-zero basis,
    so it is the only one that can wrap — the other lanes are unaffected. */
 .filterbar .lane #keyFilter{flex:1 1 130px}
+/* ── a select that has to hold more than one answer ─────────
+   Styled to match a real <select> down to the padding and the chevron,
+   because it sits in a row of them and anything else reads as a
+   different kind of control. It gets the same lane treatment too — see
+   the flex note above; a button carries no `width:100%` of its own, but
+   it must still shrink on the same terms as its neighbours. */
+.pickbtn{width:100%;background:var(--ink);border:1px solid var(--groove);
+  border-radius:8px;padding:12px;font-family:var(--mono);font-size:14px;
+  text-align:left;display:flex;align-items:center;gap:6px;min-width:0;
+  /* Matched to the height a <select> actually renders at with these
+     tokens, measured rather than derived: a select gets a minimum
+     content height of its own that padding maths does not predict, so
+     without this the button sits 3px short of the one beside it. */
+  min-height:49px}
+.pickbtn>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pickbtn::after{content:'▾';margin-left:auto;color:var(--dust);flex:none;padding-left:4px}
+.pickbtn.on{border-color:var(--sticker);color:var(--sticker)}
+.pickbtn.on::after{color:var(--sticker)}
+.filterbar .pickbtn{padding:9px 8px;font-size:13px;min-height:41px}
+.filterbar .lane .pickbtn{flex:1 1 0;width:auto}
+/* tick rows in the genre picker sheet */
+.pick.tick .box{flex:0 0 20px;height:20px;border-radius:4px;border:1px solid var(--groove);
+  display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--sticker-ink)}
+.pick.tick.on .box{background:var(--sticker);border-color:var(--sticker)}
+.pick.tick.on .who b{color:var(--sticker)}
 .check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dust);
   font-family:var(--mono);cursor:pointer;margin-top:9px}
 .check input{width:16px;height:16px;flex:0 0 16px;accent-color:var(--sticker)}
