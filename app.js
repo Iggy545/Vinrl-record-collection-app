@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.38';
+const APP_VERSION = '0.12.39';
 
 const mem = {};
 const store = {
@@ -3216,10 +3216,9 @@ const SET_SHORTLIST = 24;
 const SET_GUARD = 500;
 const SET_FALLBACK_SECS = 330; /* 5:30 — a 12" side, when Discogs gave no duration */
 
-const sideOf = p => {
-  const m = /^\s*([A-Za-z])/.exec(String(p || ''));
-  return m ? m[1].toUpperCase() : '';
-};
+/* sideOf() lived here. It existed only to tell a same-side follow-on from
+   a flip, and both of those are moves the builder can no longer make, so
+   it went with them rather than sitting unused. */
 
 /* Every track that could go in a set, plus why the others could not.
    A track needs a BPM to be here at all: without one it cannot be
@@ -3264,27 +3263,33 @@ function stepCost(c, prev, target, recent, usedRecs, startBpm){
   /* Only judged when both keys are known — a missing key is not a clash,
      and treating it as one would bury every record nobody has keyed yet. */
   if(prev.key && c.key && compatible(prev.key).indexOf(c.key) < 0) cost += 16;
-  if(prev.it.uid === c.it.uid){
-    /* Already on the deck. Same side and you just let it run, which is
-       free — the one move that costs a vinyl DJ nothing at all. Flipping
-       the record mid-set is a small price, not a forbidden one. */
-    cost += (sideOf(prev.t.pos) && sideOf(prev.t.pos) === sideOf(c.t.pos)) ? -5 : 6;
-  } else if(usedRecs.has(c.it.uid)){
+  /* A record can never follow itself — see sameRecord() below. By the time
+     a candidate reaches this function that case has already been excluded,
+     so there is no same-record branch here to price. */
+  if(usedRecs.has(c.it.uid)){
     /* Back to the crate for a sleeve already played. This is the penalty
        that stops a set asking you to pull the same record twice at
-       opposite ends of the night. */
+       opposite ends of the night. It is a cost, not a ban: with a small
+       pool, coming back to a record later is often the only way to fill
+       the time, and by then it is back in its sleeve anyway. */
     cost += 30;
   }
-  /* Judged against other RECORDS only. This rule is about not playing
-     three different records by one artist in a row; another track off
-     the record already on the deck is not that, and the same-record
-     branch above has priced it. Charging both meant a same-side
-     follow-on could never win on any weighting — measured across 132
-     joins, "let it run" fired exactly zero times until the bonus was
-     raised past this penalty, which is what gave the game away. */
-  if(recent.some(r => r.it.uid !== c.it.uid && r.artist === c.artist)) cost += 22;
+  if(recent.some(r => r.artist === c.artist)) cost += 22;
   return cost;
 }
+
+/* ── you cannot mix a record with itself ────────────────────
+   This is a hard constraint, not a weighting. Beatmatching means the
+   outgoing record is on one deck and the incoming one on the other, and
+   a single piece of vinyl cannot be on both — so the next track can
+   never come off the record currently playing, whichever side it is on.
+   "Let it run" and "flip the record" were both modelling moves that
+   cannot be performed on two decks; they are gone from the builder.
+
+   Kept as a named predicate rather than inlined because the pool filter
+   and any future check must agree, and because this is the rule most
+   likely to be re-read and doubted. */
+const sameRecord = (a, b) => !!(a && b && a.it.uid === b.it.uid);
 
 /* Beam search, width 8. Greedy was tried on paper and paints itself into
    a corner approaching the peak: it spends the good high-energy records
@@ -3297,19 +3302,31 @@ function buildSet(pool, pts, targetSecs, startBpm, seed){
   const jitter = () => rand() * 6;
   let beams = [{seq: [], used: new Set(), usedRecs: new Set(), secs: 0, cost: 0}];
   let guard = 0;
-  while(guard++ < SET_GUARD && beams.some(b => b.secs < targetSecs)){
+  /* `stuck` means this beam has no legal next track — with the
+     same-record ban that is reachable, not theoretical: a pool holding one
+     record has nothing to follow its first track with. A stuck beam is
+     done in the same sense as a full one, so the loop must stop for it too
+     or it re-pushes itself until the guard expires. */
+  while(guard++ < SET_GUARD && beams.some(b => !b.stuck && b.secs < targetSecs)){
     const next = [];
     beams.forEach(b => {
-      if(b.secs >= targetSecs){ next.push(b); return; }   /* carry finished beams */
+      if(b.stuck || b.secs >= targetSecs){ next.push(b); return; }   /* carry finished beams */
       const target = curveAt(pts, clamp(b.secs / targetSecs, 0, 1));
       const prev = b.seq[b.seq.length - 1];
       const recent = b.seq.slice(-3);
       const scored = [];
       for(const c of pool){
         if(b.used.has(c.t)) continue;
+        /* The record on the deck cannot also be the one coming in. Excluded
+           here rather than priced in stepCost, so no weighting anywhere can
+           ever buy its way past it. */
+        if(sameRecord(prev, c)) continue;
         scored.push({c, cost: stepCost(c, prev, target, recent, b.usedRecs, prev ? 0 : startBpm)});
       }
-      if(!scored.length) return;
+      /* Nothing left that can legally follow this beam — it stops here
+         rather than dying, so a pool of one record still returns its one
+         playable track instead of an empty set. */
+      if(!scored.length){ b.stuck = true; next.push(b); return; }
       scored.sort((x, y) => x.cost - y.cost);
       for(const s of scored.slice(0, SET_SHORTLIST)){
         const used = new Set(b.used); used.add(s.c.t);
@@ -3343,15 +3360,16 @@ function transition(prev, c){
      `unknown` says so instead of printing NaN%. */
   const known = prev.bpm > 0 && c.bpm > 0;
   const d = known ? (c.bpm - prev.bpm) / prev.bpm : null;
-  const sameRec = prev.it.uid === c.it.uid;
-  const sameSide = sameRec && sideOf(prev.t.pos) && sideOf(prev.t.pos) === sideOf(c.t.pos);
+  /* The builder can no longer produce this, but a set SAVED before the
+     same-record ban can still contain one — so it is still detected, and
+     reported as the problem it now is rather than as a move. */
+  const sameRec = sameRecord(prev, c);
   const inKey = prev.key && c.key ? compatible(prev.key).indexOf(c.key) >= 0 : null;
   return {
     pct: d == null ? null : d * 100,
     unknown: !known,
     hard: d != null && Math.abs(d) > PITCH_EASY,
-    letRun: sameSide,
-    flip: sameRec && !sameSide,
+    sameRec,
     inKey
   };
 }
@@ -3581,14 +3599,25 @@ function renderSetCoverage(){
   }
   const keyed = usable.filter(c => c.key).length;
   const timed = usable.filter(c => c.secs > 0).length;
+  /* Since a record can't follow itself, the count of distinct SLEEVES is
+     what actually limits a set — twelve tracks off three records make a
+     three-track set, and without this the coverage figures would look
+     healthy while the builder ran out immediately. */
+  const sleeves = new Set(usable.map(c => c.it.uid)).size;
   el.innerHTML = `
     <!-- One word each: at 375px a three-up strip gives each label 92px, and
          "with a length" wrapped to two lines while the other two didn't,
          leaving the row visibly lopsided. The hint below says what the
          numbers mean, so the labels don't have to. -->
     <div class="cov"><b>${usable.length}</b><small>usable</small></div>
+    <div class="cov"><b>${sleeves}</b><small>sleeve${sleeves === 1 ? '' : 's'}</small></div>
     <div class="cov"><b>${keyed}</b><small>keyed</small></div>
-    <div class="cov"><b>${timed}</b><small>timed</small></div>
+    ${sleeves === 1 ? `<p class="hint" style="color:var(--warn);margin:10px 0 0">Only one record
+      here, so there is nothing to mix into. A record can't follow itself — you need at least
+      two.</p>`
+     : sleeves < 6 ? `<p class="hint" style="color:var(--warn);margin:10px 0 0">Only ${sleeves}
+      records here. Since a record can't follow itself, a set will run out quickly — widen the
+      shelf or genre for a longer one.</p>` : ''}
     ${noBpm.length ? `<p class="hint" style="margin:10px 0 0">${noBpm.length} of ${total} tracks
       ${noBpm.length === 1 ? 'has' : 'have'} no BPM, so ${noBpm.length === 1 ? 'it is' : 'they are'}
       left out — you can't beatmatch what hasn't been timed. Open a record and tap along, or use
@@ -3614,10 +3643,9 @@ function renderSetResult(){
   const rows = seq.map((c, n) => {
     const tr = transition(seq[n-1], c);
     const at = mmss(run); run += (c.secs || setLast.fallback);
-    const note = !tr ? '' : `<div class="trans${tr.hard && !tr.letRun ? ' hard' : ''}">
-        ${tr.letRun ? 'let it run — same side'
-          : (tr.flip ? 'flip the record · ' : '') +
-            (tr.unknown ? 'tempo missing now'
+    const note = !tr ? '' : `<div class="trans${tr.hard || tr.sameRec ? ' hard' : ''}">
+        ${tr.sameRec ? 'same record — you can’t mix it into itself'
+          : (tr.unknown ? 'tempo missing now'
               : (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% · ' + (tr.hard ? 'hard cut' : 'blend')) +
             (tr.inKey === null ? '' : (tr.inKey ? ' · in key' : ' · key clash'))}
       </div>`;
@@ -3663,7 +3691,9 @@ function renderSetResult(){
       short ? ` — that's all the selection could fill, ${hhmm(target)} was asked for` : ''} ·
       ${pull.length} ${pull.length === 1 ? 'sleeve' : 'sleeves'} to pull</p>
     ${short ? `<p class="hint" style="color:var(--warn);margin:6px 0 0">Ran out of records that fit
-      the shape. Widen the shelf or genre, or ask for a shorter set.</p>` : ''}
+      the shape. Since a record can't follow itself, it's the number of <i>sleeves</i> that
+      limits a set, not the number of tracks — widen the shelf or genre, or ask for a
+      shorter set.</p>` : ''}
     ${gone ? `<p class="hint" style="color:var(--warn);margin:6px 0 0">${gone}
       track${gone===1?'':'s'} in this set ${gone===1?'is':'are'} no longer in your crate —
       the record was removed or the track renamed. The rest still plays in order.</p>` : ''}
@@ -3723,7 +3753,8 @@ function exportSet(){
     const nxt = setLast.seq[n+1];
     const tr = nxt ? transition(c, nxt) : null;
     const into = !tr ? '' :
-      (tr.letRun ? 'let it run' :
+      (tr.sameRec ? 'same record - cannot mix into itself' :
+       tr.unknown ? 'tempo missing' :
         (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% ' + (tr.hard ? 'hard cut' : 'blend') +
         (tr.inKey === null ? '' : (tr.inKey ? ', in key' : ', key clash')));
     return [n+1, at, c.t.title, c.artist, c.it.title, c.t.pos, c.bpm, c.key,
@@ -4441,7 +4472,8 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix. <i>Energy low–high</i> and <i>Energy, then BPM</i> order the same list by how hard things hit, and the ↓ button reverses either — so peak-time first is one tap away.</p>
     <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
     <p class="hint"><b>Keeping a set.</b> <i>Save this set</i> names it and puts it under <i>Your sets</i> at the top of the tab, where you can reopen, rename or delete it. Saved sets go into your backup and sync to your other device like everything else. They keep a <i>reference</i> to each track rather than a copy, so correcting a BPM updates every set that uses it — and if you later delete a record or rename a track, the set says how many have gone rather than quietly getting shorter. Deleting a set never touches the records.</p>
-    <p class="hint"><b>It knows these are records.</b> Two tracks off the same side in a row come up as <i>let it run</i> rather than as a mix, going to the other side says <i>flip the record</i>, and it avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
+    <p class="hint"><b>It knows these are records.</b> <b>A record never follows itself</b> — not the other side, not the next track along. You mix from one deck to the other, and the same piece of vinyl can't be on both, so every join in a set is between two different records. It also avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
+    <p class="hint"><b>So it's records, not tracks, that limit a set.</b> Twelve tracks spread over three sleeves still only makes a short set. The <i>sleeves</i> figure at the top of the tab is the one to watch, and it warns you when a selection is too thin to mix through.</p>
     <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
     <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;
   $('#scrim').classList.add('on'); $('#sheet').classList.add('on');

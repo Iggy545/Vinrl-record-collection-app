@@ -4,6 +4,29 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.39 - 2026-08-14 16:30
+
+Set builder: a record never follows itself, so every join is a real mix
+
+You mix from one deck to the other, and the same piece of vinyl cannot be on both. So the
+next track in a set can never come off the record currently playing - not the other side,
+not the next cut along. Every join is now between two different records.
+
+This replaces the old let it run and flip the record moves, which described things you
+cannot actually do with two turntables. It is a hard rule in the builder rather than a
+preference, so nothing can outweigh it.
+
+One consequence worth knowing: it is the number of sleeves that limits a set now, not the
+number of tracks. Twelve tracks spread over three records still only makes a three-track
+set. The Sets tab shows a sleeves count alongside usable and keyed, and warns you when a
+shelf or genre is too thin to mix through - or when there is only one record in it, and so
+nothing to mix into at all.
+
+Sets saved before this change still open. If one of them has a same-record join in it, the
+row now says so rather than calling it a move.
+
+- Modified `app.js` (+66/-34)
+
 ## 0.12.38 - 2026-08-14 15:45
 
 Save your sets: named, synced, backed up, and they survive the crate changing under them
@@ -79,7 +102,7 @@ Sync setup copy no longer assumes the POS app; README describes the three-file s
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the login has
+scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The
