@@ -442,7 +442,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 
 /* ── nav ──────────────────────────────────────────────────── */
 nav{position:fixed;left:0;right:0;bottom:0;z-index:50;display:grid;
-  grid-template-columns:repeat(4,1fr);
+  grid-template-columns:repeat(5,1fr);
   background:rgba(20,16,25,.94);backdrop-filter:blur(14px);
   border-top:1px solid var(--groove);padding-bottom:env(safe-area-inset-bottom)}
 nav button{padding:12px 4px 14px;font-family:var(--mono);font-size:10px;
@@ -450,6 +450,65 @@ nav button{padding:12px 4px 14px;font-family:var(--mono);font-size:10px;
   display:flex;flex-direction:column;align-items:center;gap:5px}
 nav button .ic{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
 nav button.on{color:var(--sticker)}
+
+/* ── sets ─────────────────────────────────────────────────── */
+.curvegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.curve{border:1px solid var(--groove);border-radius:var(--r);background:var(--wax);
+  padding:8px 6px 7px;display:flex;flex-direction:column;gap:4px;align-items:stretch;text-align:center}
+.curve svg{width:100%;height:30px;display:block}
+.curve svg path{fill:none;stroke:var(--dust);stroke-width:2;
+  vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
+.curve b{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dust);font-weight:400}
+.curve.on{border-color:var(--sticker);background:hsl(18 100% 56% / .10)}
+.curve.on svg path{stroke:var(--sticker)}
+.curve.on b{color:var(--sticker)}
+
+/* Coverage figures — the same three-up strip the Worth view uses, so the
+   numbers read as facts about the crate rather than as form fields. */
+#setCover{display:flex;flex-wrap:wrap;gap:14px}
+.cov{flex:1 1 28%;min-width:0}
+.cov b{display:block;font-family:var(--mono);font-size:19px;color:var(--sticker)}
+.cov small{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dust)}
+#setCover .hint{flex:1 1 100%}
+
+.setchart{width:100%;height:74px;display:block;margin:2px 0 0;
+  border:1px solid var(--groove);border-radius:var(--r);background:var(--wax)}
+.setchart .tgt{fill:none;stroke:var(--dust);stroke-width:1.5;
+  vector-effect:non-scaling-stroke;stroke-dasharray:3 3}
+.setchart .got circle{fill:var(--sticker)}
+
+.setrow{display:flex;align-items:center;gap:10px;padding:9px 0;
+  border-bottom:1px solid var(--groove)}
+.setrow .setn{font-family:var(--mono);font-size:11px;color:var(--dust);
+  flex:0 0 20px;text-align:right}
+.setrow .who{min-width:0;flex:1}
+.setrow .who b{display:block;font-size:13.5px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setrow .who span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setrow .num{display:flex;align-items:center;gap:7px;flex:none}
+.setrow .setat{font-family:var(--mono);font-size:10px;color:var(--dust)}
+.setrow .loc{font-style:normal;font-weight:700;color:var(--sticker)}
+
+/* The join between two records, called out on its own line. Indented past
+   the number column so it reads as belonging between the rows. */
+.trans{font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dust);padding:5px 0 5px 30px}
+.trans.hard{color:var(--warn)}
+
+.pull{margin-top:2px}
+.pullrow{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid var(--groove)}
+.pullrow .loc{font-style:normal;font-family:var(--mono);font-size:11px;
+  font-weight:700;color:var(--sticker);flex:0 0 52px}
+.pullrow span{min-width:0;flex:1}
+.pullrow b{display:block;font-size:13px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pullrow small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dust);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pullrow .pulln{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;color:var(--dust)}
 
 /* ── toast ────────────────────────────────────────────────── */
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));

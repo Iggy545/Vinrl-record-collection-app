@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.36';
+const APP_VERSION = '0.12.37';
 
 const mem = {};
 const store = {
@@ -2367,7 +2367,7 @@ function renderList(){
 /* renderShelfGrid and the rail both read the shelf filter, so they follow
    renderFilters. renderList draws the rail too, so changing the shelf
    filter reorders the spines as well as the grid. */
-function renderAll(){ renderStrip(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); }
+function renderAll(){ renderStrip(); renderFilters(); renderShelfGrid(); renderList(); renderStats(); renderSets(); }
 
 /* ── where is it? ───────────────────────────────────────────
    Tapping a track in the list used to do nothing at all. It now answers
@@ -3136,6 +3136,432 @@ function download(name, data, type){
 }
 
 /* ══════════════════════════════════════════════════════════
+   SETS — walk the collection along an energy curve
+   Proposes an order and a list of sleeves to pull. Writes
+   nothing to any record: a set is a reading of the crate, and
+   the moment it started reordering shelves it would collide
+   with arranging, undo and slot numbering for no gain.
+   ══════════════════════════════════════════════════════════ */
+
+/* Control points rather than formulae — you can read the shape straight
+   off the numbers, the picker draws them with the same data, and adding
+   a shape later is one line rather than an equation nobody can check.
+   x is position through the set 0–1, y is target energy 0–1. */
+const CURVES = {
+  build:   {name:'Slow build',   hint:'Opens quiet, climbs all the way, ends at the top',
+            pts:[[0,.20],[.5,.55],[.85,.90],[1,1]]},
+  double:  {name:'Double peak',  hint:'Lifts, drops back, then goes higher still',
+            pts:[[0,.25],[.28,.75],[.5,.48],[.8,.95],[1,.72]]},
+  warm:    {name:'Warm-up',      hint:'Stays under it — hands over with room to climb',
+            pts:[[0,.12],[.5,.35],[1,.55]]},
+  closing: {name:'Closing set',  hint:'Takes it from high and brings the room down',
+            pts:[[0,.85],[.3,1],[.7,.58],[1,.28]]},
+  plateau: {name:'Peak time',    hint:'Up fast and holds there',
+            pts:[[0,.55],[.25,.90],[.75,.95],[1,.80]]},
+  after:   {name:'After hours',  hint:'Long slow descent for the back end of the night',
+            pts:[[0,.80],[.4,.58],[1,.25]]}
+};
+
+function curveAt(pts, p){
+  p = clamp(p, 0, 1);
+  for(let i = 1; i < pts.length; i++){
+    if(p <= pts[i][0]){
+      const a = pts[i-1], b = pts[i], span = b[0] - a[0];
+      return span <= 0 ? b[1] : a[1] + (b[1] - a[1]) * ((p - a[0]) / span);
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+
+/* Seeded so "another go" is a deliberate re-roll rather than the same
+   answer twice, and so a test can pin the seed and get one set back. */
+function setRng(seed){
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ±8% is what a Technics gives you, so neighbours within ~6% are a
+   comfortable blend and anything past that is a hard cut. This is the
+   number digital tools have no reason to care about — software repitches
+   anything — and it is the one that decides whether a mix is possible
+   at all off two decks. */
+const PITCH_EASY = 0.06;
+const SET_BEAM = 8;            /* greedy corners itself at the peak */
+const SET_SHORTLIST = 24;
+const SET_GUARD = 500;
+const SET_FALLBACK_SECS = 330; /* 5:30 — a 12" side, when Discogs gave no duration */
+
+const sideOf = p => {
+  const m = /^\s*([A-Za-z])/.exec(String(p || ''));
+  return m ? m[1].toUpperCase() : '';
+};
+
+/* Every track that could go in a set, plus why the others could not.
+   A track needs a BPM to be here at all: without one it cannot be
+   beatmatched, so putting it in a set would be proposing a mix that
+   can't be done. Energy alone is not enough. */
+function setPool(shelf, genre){
+  const usable = [], noBpm = [], noEnergy = [];
+  DB.items.forEach(it => {
+    if(shelf && it.shelf !== shelf) return;
+    (it.tracks || []).forEach((t, i) => {
+      if(genre && String(trackGenre(t, it) || '').toLowerCase() !== String(genre).toLowerCase()) return;
+      const e = energyOf(t, it);
+      const row = {t, i, it, e: e.v, eSet: e.set, bpm: t.bpm, key: t.key || '',
+                   artist: t.artist || it.artist, secs: durSecs(t.dur)};
+      if(!(t.bpm > 0)) noBpm.push(row);
+      else if(e.v == null) noEnergy.push(row);
+      else usable.push(row);
+    });
+  });
+  return {usable, noBpm, noEnergy};
+}
+
+/* The median of the durations you do have beats a fixed guess: a crate of
+   12"s and a crate of albums estimate very differently, and the estimate
+   is what decides how many records a 90-minute set actually holds. */
+function typicalSecs(pool){
+  const known = pool.map(c => c.secs).filter(s => s > 0).sort((a,b) => a-b);
+  return known.length ? known[Math.floor(known.length/2)] : SET_FALLBACK_SECS;
+}
+
+function stepCost(c, prev, target, recent, usedRecs, startBpm){
+  /* Distance from the curve dominates everything else, because following
+     the curve is the one thing the set is for. The rest are tie-breaks
+     among tracks that already sit at roughly the right energy. */
+  let cost = Math.abs(c.e / NRG_MAX - target) * 100;
+  if(!prev){
+    if(startBpm > 0) cost += Math.abs(c.bpm - startBpm) * 1.5;
+    return cost;
+  }
+  const d = Math.abs(c.bpm - prev.bpm) / prev.bpm;
+  if(d > PITCH_EASY) cost += (d - PITCH_EASY) * 500;
+  /* Only judged when both keys are known — a missing key is not a clash,
+     and treating it as one would bury every record nobody has keyed yet. */
+  if(prev.key && c.key && compatible(prev.key).indexOf(c.key) < 0) cost += 16;
+  if(prev.it.uid === c.it.uid){
+    /* Already on the deck. Same side and you just let it run, which is
+       free — the one move that costs a vinyl DJ nothing at all. Flipping
+       the record mid-set is a small price, not a forbidden one. */
+    cost += (sideOf(prev.t.pos) && sideOf(prev.t.pos) === sideOf(c.t.pos)) ? -5 : 6;
+  } else if(usedRecs.has(c.it.uid)){
+    /* Back to the crate for a sleeve already played. This is the penalty
+       that stops a set asking you to pull the same record twice at
+       opposite ends of the night. */
+    cost += 30;
+  }
+  /* Judged against other RECORDS only. This rule is about not playing
+     three different records by one artist in a row; another track off
+     the record already on the deck is not that, and the same-record
+     branch above has priced it. Charging both meant a same-side
+     follow-on could never win on any weighting — measured across 132
+     joins, "let it run" fired exactly zero times until the bonus was
+     raised past this penalty, which is what gave the game away. */
+  if(recent.some(r => r.it.uid !== c.it.uid && r.artist === c.artist)) cost += 22;
+  return cost;
+}
+
+/* Beam search, width 8. Greedy was tried on paper and paints itself into
+   a corner approaching the peak: it spends the good high-energy records
+   early and then has to serve whatever is left across the top of the
+   curve. Keeping eight partial sets alive costs nothing at this size. */
+function buildSet(pool, pts, targetSecs, startBpm, seed){
+  if(!pool.length) return {seq: [], short: true, secs: 0};
+  const rand = setRng(seed);
+  const fallback = typicalSecs(pool);
+  const jitter = () => rand() * 6;
+  let beams = [{seq: [], used: new Set(), usedRecs: new Set(), secs: 0, cost: 0}];
+  let guard = 0;
+  while(guard++ < SET_GUARD && beams.some(b => b.secs < targetSecs)){
+    const next = [];
+    beams.forEach(b => {
+      if(b.secs >= targetSecs){ next.push(b); return; }   /* carry finished beams */
+      const target = curveAt(pts, clamp(b.secs / targetSecs, 0, 1));
+      const prev = b.seq[b.seq.length - 1];
+      const recent = b.seq.slice(-3);
+      const scored = [];
+      for(const c of pool){
+        if(b.used.has(c.t)) continue;
+        scored.push({c, cost: stepCost(c, prev, target, recent, b.usedRecs, prev ? 0 : startBpm)});
+      }
+      if(!scored.length) return;
+      scored.sort((x, y) => x.cost - y.cost);
+      for(const s of scored.slice(0, SET_SHORTLIST)){
+        const used = new Set(b.used); used.add(s.c.t);
+        const usedRecs = new Set(b.usedRecs); usedRecs.add(s.c.it.uid);
+        next.push({seq: b.seq.concat([s.c]), used, usedRecs,
+                   secs: b.secs + (s.c.secs || fallback),
+                   cost: b.cost + s.cost + jitter()});
+      }
+    });
+    if(!next.length) break;
+    /* Average rather than total: a shorter set always has a lower total,
+       so ranking on that would quietly favour stopping early. */
+    next.sort((a, b) => (a.cost / Math.max(a.seq.length,1)) - (b.cost / Math.max(b.seq.length,1)));
+    beams = next.slice(0, SET_BEAM);
+  }
+  const full = beams.filter(b => b.secs >= targetSecs);
+  const best = (full.length ? full : beams)
+    .sort((a, b) => (a.cost / Math.max(a.seq.length,1)) - (b.cost / Math.max(b.seq.length,1)))[0];
+  return {seq: best.seq, secs: best.secs, short: best.secs < targetSecs, fallback};
+}
+
+/* ── what happens between two records ───────────────────────
+   Named on the row rather than left for you to work out, because the
+   whole point of ordering by tempo and key is the join, and a set list
+   that hides it is just a playlist. */
+function transition(prev, c){
+  if(!prev) return null;
+  const d = (c.bpm - prev.bpm) / prev.bpm;
+  const pct = (d * 100);
+  const sameRec = prev.it.uid === c.it.uid;
+  const sameSide = sameRec && sideOf(prev.t.pos) && sideOf(prev.t.pos) === sideOf(c.t.pos);
+  const inKey = prev.key && c.key ? compatible(prev.key).indexOf(c.key) >= 0 : null;
+  return {
+    pct,
+    hard: Math.abs(d) > PITCH_EASY,
+    letRun: sameSide,
+    flip: sameRec && !sameSide,
+    inKey
+  };
+}
+
+/* Rolls over to h:mm:ss past the hour — a three-hour set was reading
+   "168:00", which you have to do arithmetic on to place in the night. */
+const mmss = s => {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s/3600), m = Math.floor(s/60) % 60, sec = s % 60;
+  const mm = h ? String(m).padStart(2,'0') : String(Math.floor(s/60));
+  return (h ? h + ':' : '') + mm + ':' + String(sec).padStart(2,'0');
+};
+/* "2h" rather than "2h 0m" — the trailing zero reads like a rounding
+   artefact rather than a round number. */
+const hhmm = s => {
+  const m = Math.round(s/60);
+  if(m < 60) return m + ' min';
+  const h = Math.floor(m/60), r = m % 60;
+  return h + 'h' + (r ? ' ' + r + 'm' : '');
+};
+
+/* The chart is the target curve with what you actually got plotted over
+   it — the only honest way to show a fit, and it makes a set the crate
+   couldn't really support obvious at a glance rather than after playing
+   it. */
+function setChart(seq, pts){
+  const W = 320, H = 74, pad = 8;
+  const x = p => pad + p * (W - 2*pad);
+  const y = v => H - pad - v * (H - 2*pad);
+  let d = '';
+  for(let i = 0; i <= 48; i++){
+    const p = i/48;
+    d += (i ? 'L' : 'M') + x(p).toFixed(1) + ' ' + y(curveAt(pts, p)).toFixed(1);
+  }
+  const total = seq.reduce((a,c) => a + (c.secs || 0), 0) || 1;
+  let run = 0;
+  const dots = seq.map(c => {
+    const p = run / total; run += (c.secs || 0);
+    return `<circle cx="${x(p).toFixed(1)}" cy="${y(c.e/NRG_MAX).toFixed(1)}" r="2.7"/>`;
+  }).join('');
+  return `<svg class="setchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+    role="img" aria-label="Target energy curve with the chosen tracks plotted on it">
+    <path class="tgt" d="${d}"/><g class="got">${dots}</g></svg>`;
+}
+
+let setCurve = 'build';
+let setSeed = 1;
+let setLast = null;          /* the built set, so export and swap can reach it */
+
+function renderCurvePick(){
+  const el = $('#curvePick');
+  if(!el) return;
+  el.innerHTML = Object.keys(CURVES).map(k => {
+    const c = CURVES[k];
+    let d = '';
+    for(let i = 0; i <= 24; i++){
+      const p = i/24;
+      d += (i ? 'L' : 'M') + (4 + p*72).toFixed(1) + ' ' + (30 - curveAt(c.pts, p)*24).toFixed(1);
+    }
+    return `<button class="curve ${k === setCurve ? 'on' : ''}" data-curve="${k}">
+      <svg viewBox="0 0 80 34" preserveAspectRatio="none"><path d="${d}"/></svg>
+      <b>${esc(c.name)}</b></button>`;
+  }).join('');
+}
+
+function renderSetControls(){
+  const sh = $('#setShelf'); if(!sh) return;
+  const keepS = sh.value, keepG = $('#setGenre').value;
+  sh.innerHTML = '<option value="">Every shelf</option>' +
+    DB.shelves.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  sh.value = DB.shelves.includes(keepS) ? keepS : '';
+  const gl = genreList();
+  $('#setGenre').innerHTML = '<option value="">Every genre</option>' +
+    gl.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+  $('#setGenre').value = gl.includes(keepG) ? keepG : '';
+}
+
+/* Said up front, before you build anything: a collection that isn't ready
+   for this should say so rather than quietly returning a thin set and
+   letting you find out at the gig. */
+function renderSetCoverage(){
+  const el = $('#setCover'); if(!el) return;
+  const {usable, noBpm, noEnergy} = setPool($('#setShelf').value, $('#setGenre').value);
+  const total = usable.length + noBpm.length + noEnergy.length;
+  if(!total){
+    el.innerHTML = `<div class="hint">Nothing here yet. Add some records, or widen the shelf and genre above.</div>`;
+    return;
+  }
+  const keyed = usable.filter(c => c.key).length;
+  const timed = usable.filter(c => c.secs > 0).length;
+  el.innerHTML = `
+    <!-- One word each: at 375px a three-up strip gives each label 92px, and
+         "with a length" wrapped to two lines while the other two didn't,
+         leaving the row visibly lopsided. The hint below says what the
+         numbers mean, so the labels don't have to. -->
+    <div class="cov"><b>${usable.length}</b><small>usable</small></div>
+    <div class="cov"><b>${keyed}</b><small>keyed</small></div>
+    <div class="cov"><b>${timed}</b><small>timed</small></div>
+    ${noBpm.length ? `<p class="hint" style="margin:10px 0 0">${noBpm.length} of ${total} tracks
+      ${noBpm.length === 1 ? 'has' : 'have'} no BPM, so ${noBpm.length === 1 ? 'it is' : 'they are'}
+      left out — you can't beatmatch what hasn't been timed. Open a record and tap along, or use
+      <i>Find tempo, key &amp; energy</i>.</p>` : ''}
+    ${keyed < usable.length ? `<p class="hint" style="margin:8px 0 0">${usable.length - keyed}
+      have no key yet, so they'll be placed on tempo and energy alone.</p>` : ''}
+    ${timed < usable.length ? `<p class="hint" style="margin:8px 0 0">${usable.length - timed}
+      have no length, so the running time is an estimate.</p>` : ''}`;
+}
+
+function renderSetResult(){
+  const el = $('#setOut');
+  if(!el) return;
+  if(!setLast){ el.innerHTML = ''; return; }
+  const {seq, secs, short, curve, target} = setLast;
+  if(!seq.length){
+    el.innerHTML = `<p class="hint" style="margin-top:16px">Nothing in that selection has both a
+      tempo and an energy, so there is nothing to order. Widen the shelf or genre above.</p>`;
+    return;
+  }
+  const codes = shelfCodes();
+  let run = 0;
+  const rows = seq.map((c, n) => {
+    const tr = transition(seq[n-1], c);
+    const at = mmss(run); run += (c.secs || setLast.fallback);
+    const note = !tr ? '' : `<div class="trans${tr.hard && !tr.letRun ? ' hard' : ''}">
+        ${tr.letRun ? 'let it run — same side'
+          : (tr.flip ? 'flip the record · ' : '') +
+            (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% · ' +
+            (tr.hard ? 'hard cut' : 'blend') +
+            (tr.inKey === null ? '' : (tr.inKey ? ' · in key' : ' · key clash'))}
+      </div>`;
+    return note + `<div class="setrow">
+      <span class="setn">${n+1}</span>
+      <span class="who">
+        <b>${esc(c.t.title || 'Untitled')}</b>
+        <span><i class="loc">${esc(locCode(c.it, codes))}</i> · ${esc(c.artist)} · ${esc(c.it.title)}${c.t.pos ? ' · ' + esc(c.t.pos) : ''}</span>
+      </span>
+      <span class="num">
+        <span class="setat">${at}</span>
+        <span class="nrgbar${c.eSet ? ' set' : ''}" style="--n:${c.e}" title="Energy ${c.e} of ${NRG_MAX}"></span>
+        <span class="bpmv">${c.bpm}</span>
+        ${keyBadge(c.key)}
+      </span>
+    </div>`;
+  }).join('');
+
+  /* One line per sleeve, in the order you first need it — this is the
+     thing you carry to the crate, and it is why building a set in Crate
+     beats building one anywhere else. */
+  const pull = [];
+  const seen = new Set();
+  seq.forEach((c, n) => {
+    if(seen.has(c.it.uid)) return;
+    seen.add(c.it.uid);
+    pull.push({it: c.it, first: n + 1, n: seq.filter(x => x.it.uid === c.it.uid).length});
+  });
+
+  el.innerHTML = `
+    <div class="shelfhead" style="margin:22px 0 6px">
+      <div class="eyebrow">${esc(CURVES[curve].name)}</div>
+      <div class="spacer"></div>
+      <button class="ghost" id="btnSetAgain">another go</button>
+    </div>
+    ${setChart(seq, CURVES[curve].pts)}
+    <p class="hint" style="margin:2px 0 0">${seq.length} tracks · about ${hhmm(secs)}${
+      short ? ` — that's all the selection could fill, ${hhmm(target)} was asked for` : ''} ·
+      ${pull.length} ${pull.length === 1 ? 'sleeve' : 'sleeves'} to pull</p>
+    ${short ? `<p class="hint" style="color:var(--warn);margin:6px 0 0">Ran out of records that fit
+      the shape. Widen the shelf or genre, or ask for a shorter set.</p>` : ''}
+    <div class="eyebrow" style="margin-top:16px">The order</div>
+    ${rows}
+    <div class="eyebrow" style="margin-top:18px">Pull these</div>
+    <div class="pull">${pull.map(p => `<div class="pullrow">
+      <i class="loc">${esc(locCode(p.it, codes))}</i>
+      <span><b>${esc(p.it.title)}</b><small>${esc(p.it.artist)}</small></span>
+      <span class="pulln">${p.n === 1 ? '#' + p.first : p.n + ' tracks'}</span>
+    </div>`).join('')}</div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn quiet" id="btnSetCsv">Export this set</button>
+      <button class="btn quiet" id="btnSetAgain2">Another go</button>
+    </div>`;
+
+  const again = () => { setSeed = (setSeed + 1) | 0; doBuildSet(); };
+  $('#btnSetAgain').onclick = again;
+  $('#btnSetAgain2').onclick = again;
+  $('#btnSetCsv').onclick = exportSet;
+}
+
+function doBuildSet(){
+  const shelf = $('#setShelf').value, genre = $('#setGenre').value;
+  const mins = clamp(parseInt($('#setMins').value, 10) || 90, 5, 600);
+  const startBpm = parseFloat($('#setStart').value) || 0;
+  const {usable} = setPool(shelf, genre);
+  const target = mins * 60;
+  spin(true);
+  const built = buildSet(usable, CURVES[setCurve].pts, target, startBpm, setSeed);
+  spin(false);
+  setLast = {seq: built.seq, secs: built.secs, short: built.short, fallback: built.fallback || SET_FALLBACK_SECS,
+             curve: setCurve, target};
+  renderSetResult();
+  const out = $('#setOut');
+  if(out && out.firstElementChild) out.firstElementChild.scrollIntoView({block:'start', behavior:'smooth'});
+}
+
+function exportSet(){
+  if(!setLast || !setLast.seq.length) return toast('Build a set first');
+  const codes = shelfCodes();
+  const head = ['#','At','Track','Artist','Release','Position','BPM','Camelot','Key','Energy',
+                'Length','Where','Into the next one'];
+  let run = 0;
+  const body = setLast.seq.map((c, n) => {
+    const at = mmss(run); run += (c.secs || setLast.fallback);
+    /* Computed only when there IS a next track — transition() guards its
+       first argument, not its second, so the last row would dereference
+       undefined. */
+    const nxt = setLast.seq[n+1];
+    const tr = nxt ? transition(c, nxt) : null;
+    const into = !tr ? '' :
+      (tr.letRun ? 'let it run' :
+        (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% ' + (tr.hard ? 'hard cut' : 'blend') +
+        (tr.inKey === null ? '' : (tr.inKey ? ', in key' : ', key clash')));
+    return [n+1, at, c.t.title, c.artist, c.it.title, c.t.pos, c.bpm, c.key,
+            c.key ? KEYNAME[c.key] : '', c.e, c.t.dur || '', locCode(c.it, codes), into]
+           .map(cell).join(',');
+  });
+  download('crate-set-' + setCurve + '.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
+}
+
+function renderSets(){
+  if(!$('#curvePick')) return;
+  renderCurvePick();
+  renderSetControls();
+  renderSetCoverage();
+}
+
+/* ══════════════════════════════════════════════════════════
    wiring
    ══════════════════════════════════════════════════════════ */
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
@@ -3389,6 +3815,27 @@ $('#btnDj').onclick = () => {
                      .map(cell).join(','));
   download('crate-dj-sheet.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
 };
+/* ── Sets tab ───────────────────────────────────────────────
+   Delegated, because the curve tiles are rebuilt on every render and
+   handlers bound to the old nodes would be lost. */
+$('#curvePick').onclick = e => {
+  const b = e.target.closest('[data-curve]');
+  if(!b) return;
+  setCurve = b.dataset.curve;
+  renderCurvePick();
+  /* A shape change invalidates whatever is on screen — leaving the old
+     set under a newly-highlighted tile would read as though it had been
+     rebuilt. */
+  if(setLast){ setLast = null; renderSetResult(); }
+};
+$('#btnBuildSet').onclick = doBuildSet;
+/* Scope changes redraw the coverage figures, and drop a set that was
+   built from a selection you are no longer looking at. */
+$('#setShelf').onchange = $('#setGenre').onchange = () => {
+  renderSetCoverage();
+  if(setLast){ setLast = null; renderSetResult(); }
+};
+
 let importMode = 'csv';
 /* ── shelf tiles: tap to filter, drag to reorder ────────────
    Pointer events rather than HTML5 drag-and-drop, which doesn't fire
@@ -3788,6 +4235,8 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Energy, 1 to 10.</b> Every track shows how hard it hits. Until you say otherwise the number is worked out from the track's own tempo, key and length — and crucially from where that tempo sits <i>among your other records of the same genre</i>, so "fast for a dub record" and "fast for a hard house record" aren't the same number. Nothing is stored while it's being worked out, so it re-reads itself as you fill more tempos in. Drag the slider on any track to overrule it; tap <i>reset</i> to hand it back. A track with no BPM shows — rather than a guess.</p>
     <p class="hint"><b>Or have a look online first.</b> <i>Find tempo, key &amp; energy</i> on a record asks GetSongBPM and AcousticBrainz. Expect gaps — these index streaming catalogues, and white labels, promos and vinyl-only remixes are exactly what they haven't got. It shows you what it matched and how sure it is, and writes nothing until you tick it, because the dangerous answer isn't "not found" — it's a confident number for the wrong mix. Energy comes from AcousticBrainz only, and out of the same response as the tempo, so asking for it costs no extra look-up. Tempo, key and energy data by <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a> and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
     <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix. <i>Energy low–high</i> and <i>Energy, then BPM</i> order the same list by how hard things hit, and the ↓ button reverses either — so peak-time first is one tap away.</p>
+    <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing is saved and nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
+    <p class="hint"><b>It knows these are records.</b> Two tracks off the same side in a row come up as <i>let it run</i> rather than as a mix, going to the other side says <i>flip the record</i>, and it avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
     <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
     <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;
   $('#scrim').classList.add('on'); $('#sheet').classList.add('on');

@@ -4,6 +4,32 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.37 - 2026-08-14 15:32
+
+Sets tab: build a set list along an energy curve, with a pull list
+
+A fifth tab. Pick a shape - slow build, double peak, warm-up, closing set, peak time or
+after hours - and Crate walks your collection along it, ordering records so the energy
+follows the curve.
+
+It knows these are records, not files. A Technics gives you plus or minus 8%, so a join
+inside 6% is called a blend and anything past it a hard cut. Keys follow the same Camelot
+rules as the filter. Two tracks off the same side in a row come up as let it run rather
+than as a mix, going to the other side says flip the record, and it avoids sending you
+back to a sleeve you have already put away. Underneath every set is a pull list: each
+sleeve you need, in the order you will want it, with its shelf code and position.
+
+Tracks with no BPM are left out and counted, because you cannot beatmatch what has not
+been timed. The coverage figures at the top say what your crate can and cannot support
+before you build anything.
+
+Nothing is saved yet and nothing on your records changes - another go reshuffles, and the
+whole set exports to CSV.
+
+- Modified `app.js` (+450/-1)
+- Modified `index.html` (+31/-0)
+- Modified `styles.css` (+60/-1)
+
 ## 0.12.36 - 2026-08-14 15:16
 
 Track energy 1-10: worked out from your own tempo bands, measured free from AcousticBrainz, or set by hand
@@ -31,7 +57,7 @@ Sync setup copy no longer assumes the POS app; README describes the three-file s
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on Ã¢â‚¬â€ the login has
+scratch. It now leads with the step people actually get stuck on ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The
