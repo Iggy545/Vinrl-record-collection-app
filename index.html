@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=0.12.41">
+<link rel="stylesheet" href="styles.css?v=0.12.42">
 </head>
 <body>
 
@@ -261,8 +261,7 @@
       <button class="btn quiet" id="btnRestore">Restore backup</button>
     </div>
     <button class="btn quiet" id="btnFill" style="margin-bottom:8px">Fill in from Discogs</button>
-    <button class="btn quiet" id="btnDj" style="margin-bottom:8px">Export DJ crate sheet</button>
-    <button class="btn quiet" id="btnClearPaid">Clear every “You paid”</button>
+    <button class="btn quiet" id="btnDj">Export DJ crate sheet</button>
     <input type="file" id="file" accept=".csv,.json" style="display:none">
     <p class="hint"><b>Export backup</b> saves everything — every record with its tracklists, BPMs, keys, energies, grades and shelf order, your saved sets, plus your Discogs token and sync settings. That's the one to keep. Because it holds your token and Firebase details, treat the file like a password.</p>
     <p class="hint">The CSV matches Discogs' own export layout, so it goes straight back into your Discogs collection with no fiddling. It carries no artwork or tracklists though — Discogs doesn't put them in the export — so after importing, tap <b>Fill in from Discogs</b> to pull those in.</p>
@@ -329,6 +328,6 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
 <div id="toast" role="status"></div>
 
-<script src="app.js?v=0.12.41"></script>
+<script src="app.js?v=0.12.42"></script>
 </body>
 </html>

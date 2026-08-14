@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.41';
+const APP_VERSION = '0.12.42';
 
 const mem = {};
 const store = {
@@ -4146,28 +4146,6 @@ $('#setSaved').onclick = e => {
 $('#setShelf').onchange = $('#setGenre').onchange = () => {
   renderSetCoverage();
   if(setLast){ setLast = null; renderSetResult(); }
-};
-
-/* ── clear "You paid" across the whole collection ────────────
-   Blanks the field rather than writing 0: blank means "not recorded" and
-   removes the up-or-down line altogether, where 0 means "it cost me
-   nothing" and makes every record read as pure profit. Those are
-   different claims and only one of them is usually true.
-
-   Not undoable — the arranging undo stack covers record MOVES only — so
-   the confirm names the count and points at the backup. Deliberately not
-   scoped to the filter bar: "all" is the only thing anyone means here,
-   and a half-cleared collection would be worse than either state. */
-$('#btnClearPaid').onclick = () => {
-  const n = DB.items.filter(i => i.paid != null).length;
-  if(!n) return toast('No record has a “You paid” figure to clear', 3600);
-  if(!confirm(`Clear “You paid” on ${n} record${n === 1 ? '' : 's'}?\n\n`
-    + `The field goes blank on every record, so none of them show an up-or-down line `
-    + `any more. Grades, prices, tracklists and shelves are untouched.\n\n`
-    + `There is no undo. Export a backup first if you might want the figures back.`)) return;
-  DB.items.forEach(i => i.paid = null);
-  save(); renderAll();
-  toast(`Cleared “You paid” on ${n} record${n === 1 ? '' : 's'}`, 3600);
 };
 
 let importMode = 'csv';
