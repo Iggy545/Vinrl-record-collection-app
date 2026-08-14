@@ -451,6 +451,21 @@ nav button{padding:12px 4px 14px;font-family:var(--mono);font-size:10px;
 nav button .ic{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
 nav button.on{color:var(--sticker)}
 
+/* The crate is filtered to a set. Loud on purpose: this is the only state
+   set on one tab that changes what another tab shows, and a quietly
+   half-empty crate reads as lost records. */
+.setfilter{display:flex;align-items:center;gap:10px;margin:10px 0 0;padding:9px 12px;
+  border:1px solid var(--sticker);border-radius:var(--r);
+  background:hsl(18 100% 56% / .10)}
+.setfilter .who{min-width:0;flex:1}
+.setfilter b{display:block;font-size:13px;font-weight:500;color:var(--sticker);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setfilter small{display:block;font-family:var(--mono);font-size:10px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--dust)}
+.setfilter button{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dust);border:1px solid var(--groove);
+  border-radius:6px;padding:6px 8px;background:var(--ink)}
+
 /* ── sets ─────────────────────────────────────────────────── */
 .curvegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .curve{border:1px solid var(--groove);border-radius:var(--r);background:var(--wax);

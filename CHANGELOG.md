@@ -4,6 +4,30 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.40 - 2026-08-14 16:47
+
+Show these in the crate: take a saved set to the Crate tab and tap through to each record
+
+Open a saved set and there is a new button, Show these in the crate. It takes you to the
+Crate tab showing only that set's tracks - so a tap on any of them opens the locator you
+already had: shelf, position, the front-to-back ruler and the two records either side.
+
+Switch to Sleeves and the same filter gives you the pull list as a wall of covers, which is
+the view you want when you are actually pulling them.
+
+It is precise about tracks, not just records: if a set uses two cuts off a record that has
+eight tracks on it, you see those two and not the other six.
+
+An orange bar across the top of the crate says which set you are looking at and how much of
+it there is, because this is the one thing set on one tab that changes what another tab
+shows, and a quietly half-empty crate reads as lost records. Show all on that bar, or Clear
+filters, puts everything back. Renaming a set updates the bar, and deleting one turns the
+filter off rather than leaving the crate filtered by a name that has gone.
+
+- Modified `app.js` (+4631/-4545)
+- Modified `index.html` (+2/-0)
+- Modified `styles.css` (+15/-0)
+
 ## 0.12.39 - 2026-08-14 16:30
 
 Set builder: a record never follows itself, so every join is a real mix
@@ -102,7 +126,7 @@ Sync setup copy no longer assumes the POS app; README describes the three-file s
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the login has
+scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The

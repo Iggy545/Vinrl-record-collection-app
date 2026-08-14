@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.39';
+const APP_VERSION = '0.12.40';
 
 const mem = {};
 const store = {
@@ -1586,9 +1586,37 @@ function renderCrate(){
 }
 
 /* current filter settings, read once per render */
+/* ── "show these in the crate" ───────────────────────────────
+   Holds the id of a saved set, never the resolved tracks. Resolving
+   fresh on every read costs nothing at a set's size and means the filter
+   cannot go stale: sync replaces DB.items wholesale, so a cached list of
+   track OBJECTS would quietly match nothing after an incoming update and
+   the crate would look empty for no visible reason.
+
+   This is the one piece of cross-view state in the app, so it is drawn on
+   screen whenever it is on — an unexplained half-empty crate is exactly
+   the failure the Sets tab's own scope pickers were built to avoid. */
+let setFilter = null;          /* {id, name} */
+
+const setKey = (it, t) => it.uid + ' ' + String(t.title || '').trim().toLowerCase();
+
+/* Track keys and record uids for the active set, or null when off. */
+function setFilterSel(){
+  if(!setFilter) return null;
+  const s = (DB.sets || []).find(x => x.id === setFilter.id);
+  if(!s) return null;                       /* deleted while filtering */
+  const {seq} = resolveSet(s);
+  return {
+    tracks: new Set(seq.map(c => setKey(c.it, c.t))),
+    recs: new Set(seq.map(c => c.it.uid)),
+    n: seq.length
+  };
+}
+
 function filters(){
   const kf = $('#keyFilter').value;
   return {
+    set: setFilterSel(),
     q: $('#q').value.trim().toLowerCase(),
     shelf: $('#shelfFilter').value,
     fmt: $('#fmtFilter').value,
@@ -1629,6 +1657,8 @@ const bpmOk = (t,f) => !(f.lo || f.hi) ? true
   : (t.bpm > 0 && (!f.lo || t.bpm >= f.lo) && (!f.hi || t.bpm <= f.hi));
 const keyOk = (t,f) => !f.keys ? true : f.keys.includes(t.key);
 function relOk(it,f){
+  /* Record level, so the sleeve grid filtered to a set IS the pull list. */
+  if(f.set && !f.set.recs.has(it.uid)) return false;
   if(f.shelf && it.shelf !== f.shelf) return false;
   if(f.fmt && !(it.format||'').toLowerCase().includes(f.fmt.toLowerCase())) return false;
   if(!genreOk(it,f)) return false;
@@ -2128,6 +2158,11 @@ function visible(){
 function visibleTracks(){
   const f = filters();
   let rows = allTracks().filter(({t,it}) => {
+    /* Track level, and tested BEFORE the search fallback below: a record
+       can contribute two tracks to a set and eight to the crate, so
+       matching on the record would drag in six that were never in it.
+       Kept out of relOk() so the q fallback cannot smuggle them past. */
+    if(f.set && !f.set.tracks.has(setKey(it, t))) return false;
     if(!relOk(it,f)){
       if(!f.q) return false;
       if(!`${t.title} ${t.artist}`.toLowerCase().includes(f.q)) return false;
@@ -2369,9 +2404,38 @@ function updateArrangeBar(){
   paintSel();          /* which surface shows ticks follows the arrange flags */
 }
 
+/* Drawn from DB.sets each time rather than from what the button captured,
+   so renaming or deleting the set while it is being viewed is reflected
+   immediately — and a set deleted underneath the filter turns it off
+   rather than leaving the crate filtered by a name that no longer exists. */
+function renderSetFilterBar(){
+  const el = $('#setFilterBar'); if(!el) return;
+  const sel = setFilterSel();
+  if(!sel){
+    if(setFilter) setFilter = null;
+    el.style.display = 'none'; el.innerHTML = '';
+    return;
+  }
+  const s = (DB.sets || []).find(x => x.id === setFilter.id);
+  const nr = sel.recs.size;
+  el.style.display = '';
+  el.innerHTML = `<span class="who">
+      <b>${esc(s.name)}</b>
+      <small>${sel.n
+        /* Every record in the set has since been removed from the crate.
+           Saying "0 tracks — tap one to see where it is" would be absurd,
+           and an empty crate with no explanation worse. */
+        ? `${sel.n} track${sel.n===1?'':'s'} · ${nr} sleeve${nr===1?'':'s'} · tap one to see where it is`
+        : 'none of these records are in your crate any more'}</small>
+    </span>
+    <button id="setFilterOff">show all</button>`;
+  $('#setFilterOff').onclick = () => { setFilter = null; renderList(); };
+}
+
 function renderList(){
   $('#grid').style.display  = MODE==='sleeves' ? '' : 'none';
   $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
+  renderSetFilterBar();
   renderCrate();
   updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
@@ -3529,7 +3593,11 @@ function deleteSet(id){
   DB.sets = (DB.sets || []).filter(x => x.id !== id);
   save();
   if(setLast && setLast.savedId === id) setLast = null;
-  renderSets(); renderSetResult();
+  /* The crate must not stay filtered by a set that no longer exists.
+     renderSetFilterBar() also copes, but clearing it here means the next
+     render of the Crate tab is already correct rather than self-healing. */
+  if(setFilter && setFilter.id === id) setFilter = null;
+  renderSets(); renderSetResult(); renderList();
   toast('Deleted');
 }
 
@@ -3705,7 +3773,8 @@ function renderSetResult(){
       <span><b>${esc(p.it.title)}</b><small>${esc(p.it.artist)}</small></span>
       <span class="pulln">${p.n === 1 ? '#' + p.first : p.n + ' tracks'}</span>
     </div>`).join('')}</div>
-    <div class="row" style="margin-top:16px">
+    ${saved ? `<button class="btn" id="btnSetInCrate" style="margin-top:16px">Show these in the crate</button>` : ''}
+    <div class="row" style="margin-top:${saved ? '8' : '16'}px">
       <button class="btn quiet" id="btnSetCsv">Export this set</button>
       ${saved ? `<button class="btn quiet" id="btnSetDel">Delete this set</button>`
               : `<button class="btn" id="btnSetSave">Save this set</button>`}
@@ -3720,6 +3789,18 @@ function renderSetResult(){
   /* Closing puts the tab back to the builder rather than deleting
      anything — the set is still in the list underneath. */
   if($('#btnSetClose')) $('#btnSetClose').onclick = () => { setLast = null; renderSets(); renderSetResult(); };
+  /* Only offered for a SAVED set: the filter holds an id and resolves it
+     on every read, so there is nothing for it to point at until the set
+     has been saved. Lands on Tracks, because that is the surface where a
+     tap opens the locator — which is the whole point of coming here. */
+  if($('#btnSetInCrate')) $('#btnSetInCrate').onclick = () => {
+    setFilter = {id: setLast.savedId};
+    MODE = 'tracks';
+    document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === 'tracks'));
+    document.querySelector('nav button[data-v="crate"]').click();
+    renderList();
+    toast('Crate filtered to “' + setLast.name + '” — tap a track to see where it is', 4200);
+  };
   $('#btnSetCsv').onclick = exportSet;
 }
 
@@ -3852,6 +3933,10 @@ $('#clearF').onclick = () => {
   ['#q','#bpmMin','#bpmMax'].forEach(s => $(s).value = '');
   ['#shelfFilter','#fmtFilter','#genreFilter','#keyFilter'].forEach(s => $(s).value = '');
   $('#harmonic').checked = false;
+  /* The set filter is a filter, so "clear filters" clears it too — leaving
+     it on while everything else reset is the same class of surprise as
+     leaving the sort reversed. */
+  setFilter = null;
   /* the direction is a filter too — leaving it reversed after "clear"
      is exactly the sort of thing that reads as a bug */
   const d = $('#sortDir');
@@ -4473,6 +4558,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
     <p class="hint"><b>Keeping a set.</b> <i>Save this set</i> names it and puts it under <i>Your sets</i> at the top of the tab, where you can reopen, rename or delete it. Saved sets go into your backup and sync to your other device like everything else. They keep a <i>reference</i> to each track rather than a copy, so correcting a BPM updates every set that uses it — and if you later delete a record or rename a track, the set says how many have gone rather than quietly getting shorter. Deleting a set never touches the records.</p>
     <p class="hint"><b>It knows these are records.</b> <b>A record never follows itself</b> — not the other side, not the next track along. You mix from one deck to the other, and the same piece of vinyl can't be on both, so every join in a set is between two different records. It also avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
+    <p class="hint"><b>Taking a set to the crate.</b> Open a saved set and tap <i>Show these in the crate</i>. The Crate tab comes up filtered to just that set's tracks, so a tap on any of them opens the locator — shelf, position, the ruler and the two records either side. Switch to <i>Sleeves</i> and the same filter gives you the pull list as a wall of covers. An orange bar across the top says which set you're looking at; <i>show all</i> on it, or <i>Clear filters</i>, puts the whole crate back.</p>
     <p class="hint"><b>So it's records, not tracks, that limit a set.</b> Twelve tracks spread over three sleeves still only makes a short set. The <i>sleeves</i> figure at the top of the tab is the one to watch, and it warns you when a selection is too thin to mix through.</p>
     <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
     <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;
