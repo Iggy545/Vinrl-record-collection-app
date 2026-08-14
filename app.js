@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.35';
+const APP_VERSION = '0.12.36';
 
 const mem = {};
 const store = {
@@ -38,6 +38,11 @@ async function load(){
 }
 let saveTimer;
 function save(){
+  /* Not inside the debounce: renderAll() runs synchronously right after
+     most save() calls, so a tempo typed in has to be visible to the
+     energy scorer immediately or the row you just edited redraws from
+     the stale band. Defined further down; harmless before it exists. */
+  try{ clearBands(); }catch(e){}
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     store.set('crate.db', DB);
@@ -452,7 +457,7 @@ function mkTrack(t, parentPos){
     title: t.title || 'Untitled',
     artist: (t.artists||[]).map(a => cleanName(a.name)).join(' & '), // blank = same as release
     dur: t.duration || '',
-    bpm: null, key: '', genre: ''
+    bpm: null, key: '', genre: '', energy: null
   };
 }
 function flatTracks(list){
@@ -487,7 +492,11 @@ function mergeTracks(fresh, old){
       dur:    m.dur    || t.dur,
       bpm:    m.bpm ?? null,
       key:    m.key    || '',
-      genre:  m.genre  || ''
+      genre:  m.genre  || '',
+      /* Discogs has no energy field, so this can only ever come from
+         here — a refresh that dropped it would silently undo work that
+         nothing else in the app can put back. */
+      energy: m.energy ?? null
     };
   });
   /* Whatever is left never matched a Discogs track, so it is one you
@@ -657,6 +666,11 @@ async function fromGetSongBpm(artist, title){
   return {
     bpm: bpm > 0 ? Math.round(bpm*10)/10 : null,
     key: cam || '',
+    /* No energy here. GetSongBPM returns a tempo and a key and nothing
+       that describes how hard the record hits, so this is a real null
+       rather than an unset field — lookupTempoKey reads it to decide
+       whether AcousticBrainz is still worth a call. */
+    energy: null,
     conf: 0,
     matched: [hit.artist && hit.artist.name, hit.title].filter(Boolean).join(' — ') || title,
     source: 'GetSongBPM'
@@ -687,6 +701,10 @@ async function fromAcousticBrainz(artist, title){
     return {
       bpm: Math.round(d.rhythm.bpm * 10) / 10,
       key: toCamelot(d.tonal && d.tonal.key_key, d.tonal && d.tonal.key_scale),
+      /* Read off the document already in hand — the loudness, onset and
+         spectral figures come down in the same response as the tempo, so
+         this costs nothing beyond the call that was being made anyway. */
+      energy: measuredEnergy(d),
       conf: Math.round(((d.tonal && d.tonal.key_strength) || 0) * 100),
       matched: [who && who.name, rec.title].filter(Boolean).join(' — ') || title,
       source: 'AcousticBrainz'
@@ -704,12 +722,47 @@ async function fromAcousticBrainz(artist, title){
 function inRange(r){
   if(!r) return null;
   if(r.bpm != null && !(r.bpm >= BPM_MIN && r.bpm <= BPM_MAX)) r.bpm = null;
-  return (r.bpm != null || r.key) ? r : null;
+  if(r.energy != null && !(r.energy >= NRG_MIN && r.energy <= NRG_MAX)) r.energy = null;
+  return (r.bpm != null || r.key || r.energy != null) ? r : null;
 }
 
-async function lookupTempoKey(artist, title){
-  try{ const g = inRange(await fromGetSongBpm(artist, title)); if(g) return g; }catch(e){}
-  try{ return inRange(await fromAcousticBrainz(artist, title)); }catch(e){ return null; }
+/* ── two sources, asked for only what is actually missing ────
+   `want` says which of the three the track still needs, so nothing is
+   fetched that could not be used if it arrived. Two consequences that
+   are the point of it:
+   • A track that only lacks energy skips GetSongBPM entirely — that
+     source has no energy field, so calling it would burn a request to
+     learn nothing.
+   • A track that lacks all three goes to GetSongBPM for tempo and key
+     and then STILL calls AcousticBrainz, because energy can only come
+     from there. That is a second, rate-limited request per track; it
+     is why the look-up is slower than it was and why the button counts.
+
+   When both sources contribute, what came from where is kept — `from2`
+   lists the fields the second source supplied. The review panel prints
+   both provenance lines, because "128 BPM and energy 7" sitting under
+   one match that only ever knew about the tempo is exactly the kind of
+   confident-but-wrong that this whole flow exists to prevent. */
+async function lookupTempoKey(artist, title, want){
+  const w = want || {bpm:true, key:true, energy:true};
+  const missing = r => (w.bpm && r.bpm == null) || (w.key && !r.key) || (w.energy && r.energy == null);
+  let out = null;
+  if(w.bpm || w.key){
+    try{ out = inRange(await fromGetSongBpm(artist, title)); }catch(e){}
+  }
+  if(out && !missing(out)) return out;
+  let ab = null;
+  try{ ab = inRange(await fromAcousticBrainz(artist, title)); }catch(e){}
+  if(!ab) return out;
+  if(!out) return ab;
+  const from2 = [];
+  if(out.bpm == null && ab.bpm != null){ out.bpm = ab.bpm; from2.push('bpm'); }
+  if(!out.key && ab.key){ out.key = ab.key; from2.push('key'); }
+  if(out.energy == null && ab.energy != null){ out.energy = ab.energy; from2.push('energy'); }
+  if(from2.length){
+    out.from2 = from2; out.source2 = ab.source; out.matched2 = ab.matched; out.conf2 = ab.conf;
+  }
+  return out;
 }
 
 /* every track in the collection, flattened, with its release attached */
@@ -736,6 +789,165 @@ const trackGenre = (t, it) => (t && t.genre) || ((it && it.genres) || [])[0] || 
 function relGenre(it){
   const g = (it.tracks||[]).map(t => t.genre).filter(Boolean);
   return g.length ? g[0] : (((it.genres)||[])[0] || '');
+}
+
+/* ══════════════════════════════════════════════════════════
+   How hard a track hits — 1 to 10
+   There is no audio here. Crate holds metadata about pressings,
+   not the music, so nothing in this file can listen to anything:
+   every number below is either inferred from what is already on
+   the track, measured by somebody else (AcousticBrainz, via the
+   tempo look-up) or typed in by you.
+
+   Two states, one stored field. t.energy holds 1–10 once it has
+   been settled — whether you dialled it in or accepted a measured
+   figure — exactly the way t.bpm holds a tempo regardless of
+   whether it was tapped or looked up. Until then the number is
+   DERIVED fresh on every read and never written, so it re-reads
+   itself as the collection grows and can't go stale. Same rule as
+   shelfCodes() and locCode().
+   ══════════════════════════════════════════════════════════ */
+const NRG_MIN = 1, NRG_MAX = 10;
+const clamp = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+
+/* "4:32" → 272. Discogs writes durations this way, and leaves them
+   blank often enough that every caller has to cope with null. */
+function durSecs(d){
+  const m = /^\s*(?:(\d+):)?(\d{1,2}):(\d{2})\s*$/.exec(String(d||''));
+  if(!m) return null;
+  return (+(m[1]||0))*3600 + (+m[2])*60 + (+m[3]);
+}
+
+/* ── the tempo band a genre occupies IN THIS COLLECTION ──────
+   128 BPM is peak-time house and a half-speed drum & bass record, so
+   a fixed table of "fast" and "slow" per genre would be wrong about
+   somebody else's crate and would need maintaining as a third genre
+   list alongside genreList() and the Discogs styles. Instead the band
+   is read off the records themselves: the 10th and 90th percentile of
+   every track filed under that genre. It calibrates itself, it needs
+   no upkeep, and it means "hard for a dub record" and "hard for a
+   hard house record" are different numbers, which is the whole point.
+
+   Below MIN_PEERS a genre has no meaningful spread of its own, so it
+   borrows the whole collection's band rather than inventing one off
+   three tracks.
+
+   Memoised because visibleTracks() would otherwise rebuild it once per
+   row. Cleared by save(), which is the single mutation funnel — so a
+   tempo typed in is reflected the moment anything re-renders. */
+const NRG_PEERS_MIN = 5;
+let bandCache = null;
+function clearBands(){ bandCache = null; }
+function tempoBands(){
+  if(bandCache) return bandCache;
+  const by = new Map(), all = [];
+  DB.items.forEach(it => (it.tracks||[]).forEach(t => {
+    if(!(t.bpm > 0)) return;
+    all.push(t.bpm);
+    const g = String(trackGenre(t, it) || '').toLowerCase();
+    if(!g) return;
+    if(!by.has(g)) by.set(g, []);
+    by.get(g).push(t.bpm);
+  }));
+  const band = xs => {
+    if(xs.length < 2) return null;
+    const s = xs.slice().sort((a,b) => a-b);
+    const at = p => s[clamp(Math.round(p * (s.length-1)), 0, s.length-1)];
+    const lo = at(0.10), hi = at(0.90);
+    /* A collection of nothing but 128s has no spread to place anything
+       within. Saying so beats dividing by zero and calling everything
+       maximum energy. */
+    return hi - lo < 4 ? null : {lo, hi};
+  };
+  /* The same floor applies to the whole-collection band as to a genre's.
+     Without it a crate with two tempos in it produces a two-point "band"
+     and calls the faster of them a confident 10 — which is how a brand
+     new collection, or one where the tempos have barely been filled in,
+     would read as though it had been measured. Below the floor there is
+     nothing to calibrate against and NRG_ABS is the honest answer. */
+  const out = {all: all.length >= NRG_PEERS_MIN ? band(all) : null, by: new Map()};
+  by.forEach((xs, g) => { if(xs.length >= NRG_PEERS_MIN) out.by.set(g, band(xs)); });
+  bandCache = out;
+  return out;
+}
+
+/* Absolute fallback for a collection too small to calibrate against:
+   a lazy 90 through a hard 150, which covers most of what gets played
+   off vinyl. Only ever reached before there is real data to read. */
+const NRG_ABS = {lo: 90, hi: 150};
+
+/* Returns 1–10, or null when there is genuinely nothing to go on.
+   Null is a real answer here and is shown as "—" rather than as a
+   middling 5: a track nobody has put a tempo on is unknown, not
+   average, and burying that would put unmeasured records into the
+   middle of a set list as though they had been checked. */
+function derivedEnergy(t, it){
+  if(!t || !(t.bpm > 0)) return null;
+  const bands = tempoBands();
+  const g = String(trackGenre(t, it) || '').toLowerCase();
+  const band = (g && bands.by.get(g)) || bands.all || NRG_ABS;
+  let v = 1 + 9 * clamp((t.bpm - band.lo) / (band.hi - band.lo), 0, 1);
+  /* Mode is a nudge, not a component. Minor keys read as driving and
+     major as euphoric, and both of those are high-energy — so this is
+     worth half a point either way and no more. Overweighting it made
+     every minor-key warm-up record sort as peak time. */
+  if(t.key) v += t.key.slice(-1) === 'A' ? 0.5 : -0.5;
+  /* A nine-minute track off a 12" is nearly always a tool with a long
+     intro; a three-minute one is an edit that gets on with it. */
+  const s = durSecs(t.dur);
+  if(s) v += s > 420 ? -0.7 : (s < 210 ? 0.6 : 0);
+  return clamp(Math.round(v), NRG_MIN, NRG_MAX);
+}
+
+/* The one function everything else asks. Never returns a bare number,
+   because where it came from changes what you are allowed to do with
+   it: a derived 8 is a guess worth overriding, a set 8 is your answer
+   and nothing may quietly replace it. */
+function energyOf(t, it){
+  const set = Number(t && t.energy);
+  if(set >= NRG_MIN && set <= NRG_MAX) return {v: Math.round(set), set: true};
+  const d = derivedEnergy(t, it);
+  return d == null ? {v: null, set: false} : {v: d, set: false};
+}
+
+/* A record's energy, for ordering sleeves: the hardest track on it,
+   not the average. A 12" is pulled for its best side — averaging a
+   peak-time A against an ambient B describes neither, and would file
+   the record somewhere you would never look for it. */
+function relEnergy(it){
+  const vs = (it.tracks||[]).map(t => energyOf(t, it).v).filter(v => v != null);
+  return vs.length ? Math.max.apply(null, vs) : null;
+}
+
+/* ── turning somebody else's analysis into 1–10 ──────────────
+   AcousticBrainz's low-level document — the one fromAcousticBrainz()
+   ALREADY fetches to read a tempo off, so this costs no extra request.
+   Five signals, weighted, all of them normalised against the range
+   real dance records actually occupy rather than the theoretical one:
+     average_loudness    how squashed and loud the master is
+     rhythm.danceability their own measure, roughly 0.8–2.6 in practice
+     rhythm.onset_rate   events per second — busy-ness
+     high spectral band  brightness, so hats and stabs over dub and pad
+     dynamic_complexity  INVERTED: less dynamic range = more relentless
+   Anything missing drops out of the weighting rather than counting as
+   zero, which would drag a partial analysis down to 1 and make a
+   thinly-analysed track look like an ambient one. */
+function measuredEnergy(d){
+  const ll = (d && d.lowlevel) || {}, r = (d && d.rhythm) || {};
+  const num = x => (typeof x === 'number' && isFinite(x)) ? x : null;
+  const mean = o => o && num(o.mean);
+  const n = (x, lo, hi) => x == null ? null : clamp((x - lo) / (hi - lo), 0, 1);
+  const parts = [
+    [n(num(ll.average_loudness), 0.20, 0.98), 3],
+    [n(num(r.danceability),      0.80, 2.60), 2],
+    [n(num(r.onset_rate),        1.50, 7.00), 2],
+    [n(mean(ll.spectral_energyband_high), 0.0002, 0.0200), 1.5],
+    [n(num(ll.dynamic_complexity), 8.0, 1.5), 1.5]   /* hi < lo inverts it */
+  ].filter(p => p[0] != null);
+  if(!parts.length) return null;
+  const w = parts.reduce((a,p) => a + p[1], 0);
+  const v = parts.reduce((a,p) => a + p[0]*p[1], 0) / w;
+  return clamp(Math.round(1 + v*9), NRG_MIN, NRG_MAX);
 }
 
 /* ── where a record lives, in short ─────────────────────────
@@ -1880,7 +2092,12 @@ function visible(){
     },
     bpm:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9),
     keybpm:(a,b)=> keyRank(relKey(a)) - keyRank(relKey(b)) || (relBpm(a)??1e9) - (relBpm(b)??1e9),
-    bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b))
+    bpmkey:(a,b)=> (relBpm(a)??1e9) - (relBpm(b)??1e9) || keyRank(relKey(a)) - keyRank(relKey(b)),
+    /* relEnergy is the record's hardest track, so ordering sleeves this
+       way puts them where you would reach for them. Records with nothing
+       to go on sort to the back, the same as they do by BPM. */
+    energy:(a,b)=> (relEnergy(a)??1e9) - (relEnergy(b)??1e9),
+    energybpm:(a,b)=> (relEnergy(a)??1e9) - (relEnergy(b)??1e9) || (relBpm(a)??1e9) - (relBpm(b)??1e9)
   }[f.sort];
   /* Negating the chosen comparator rather than writing a reversed twin of
      each one: a new sort added later gets its opposite for nothing. */
@@ -1929,7 +2146,13 @@ function visibleTracks(){
     },
     bpm:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9),
     keybpm:(a,b)=> keyRank(a.t.key) - keyRank(b.t.key) || (a.t.bpm||1e9) - (b.t.bpm||1e9),
-    bpmkey:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9) || keyRank(a.t.key) - keyRank(b.t.key)
+    bpmkey:(a,b)=> (a.t.bpm||1e9) - (b.t.bpm||1e9) || keyRank(a.t.key) - keyRank(b.t.key),
+    /* The track's own energy here, worked out or yours — this is the
+       surface you build a set off, so it reads the same number the bar
+       on each row is showing. */
+    energy:(a,b)=> (energyOf(a.t,a.it).v??1e9) - (energyOf(b.t,b.it).v??1e9),
+    energybpm:(a,b)=> (energyOf(a.t,a.it).v??1e9) - (energyOf(b.t,b.it).v??1e9)
+                      || (a.t.bpm||1e9) - (b.t.bpm||1e9)
   }[f.sort];
   return {rows: rows.sort(f.desc ? (a,b) => -cmp(a,b) : cmp), sort: f.sort};
 }
@@ -1947,6 +2170,7 @@ function renderTracks(){
   const grouped = sort === 'keybpm';
   const codes = shelfCodes();          /* once per render, not once per row */
   rows.forEach(({t,i,it}) => {
+    const e = energyOf(t, it);
     if(grouped && t.key !== lastKey){
       lastKey = t.key;
       html += `<div class="keyhead"><b>${t.key || 'NO KEY'}</b><span>${t.key?KEYNAME[t.key]:'not set yet'}</span></div>`;
@@ -1958,6 +2182,8 @@ function renderTracks(){
         <span><i class="loc">${esc(locCode(it, codes))}</i> · ${esc(t.artist || it.artist)} · ${esc(it.title)}${t.pos?' · '+esc(t.pos):''}</span>
       </span>
       <span class="num">
+        <span class="nrgbar${e.set ? ' set' : ''}" style="--n:${e.v == null ? 0 : e.v}"
+              title="Energy ${e.v == null ? 'not known — no BPM on this track' : e.v + ' of ' + NRG_MAX + (e.set ? ' (yours)' : ' (worked out)')}"></span>
         <span class="bpmv">${t.bpm ? t.bpm : '<small>—</small>'}</span>
         ${keyBadge(t.key)}
       </span>
@@ -2260,7 +2486,9 @@ function openSheet(uid){
       <button class="ghost" id="sTrackEdit">${trackEdit ? 'done' : 'edit details'}</button>
     </div>
     <datalist id="genreOpts">${genreList().map(g=>`<option value="${esc(g)}">`).join('')}</datalist>
-    ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>`
+    ${(it.tracks||[]).length ? (it.tracks||[]).map((t,i)=>{
+      const e = energyOf(t, it);
+      return `
       <div class="ed">
         <div class="top">
           <input type="text" class="tPos" data-i="${i}" value="${esc(t.pos || '')}"
@@ -2286,11 +2514,19 @@ function openSheet(uid){
           <input type="text" class="tGen" data-i="${i}" list="genreOpts"
                  placeholder="Genre" value="${esc(t.genre || '')}">
         </div>
-      </div>`).join('')
+        <div class="nrg">
+          <span class="nrgt">NRG</span>
+          <input type="range" class="tNrg" data-i="${i}" min="${NRG_MIN}" max="${NRG_MAX}" step="1"
+                 value="${e.v == null ? Math.round((NRG_MIN+NRG_MAX)/2) : e.v}" aria-label="Energy">
+          <span class="nrgv ${e.set ? 'on' : ''}">${e.v == null ? '—' : e.v + `<small>/${NRG_MAX}</small>`}</span>
+          <button class="nrgx" data-i="${i}" ${e.set ? '' : 'hidden'}>reset</button>
+          <span class="nrgd" ${e.set ? 'hidden' : ''}>${e.v == null ? 'no bpm' : 'worked out'}</span>
+        </div>
+      </div>`;}).join('')
       : '<p class="hint">No tracklist on this one. Add the tracks you care about.</p>'}
     <div class="row" style="margin-top:10px">
       <button class="btn quiet" id="sAddTrack">Add a track</button>
-      <button class="btn quiet" id="sLookup">Find tempo &amp; key</button>
+      <button class="btn quiet" id="sLookup">Find tempo, key &amp; energy</button>
     </div>
     <div class="row" style="margin-top:8px">
       <button class="btn quiet" id="sGenreAll">Set genre for every track</button>
@@ -2400,6 +2636,50 @@ function openSheet(uid){
     };
   });
 
+  /* ── energy, 1–10 ──────────────────────────────────────────
+     Repainted in place rather than through openSheet(): rebuilding the
+     sheet scrolls a twelve-track LP back to the top, and this is a
+     control you nudge repeatedly while the record is playing. Same
+     reason the genre box doesn't re-open the sheet either.
+     Three things change together — the number, whether it reads as
+     yours, and whether there is anything to reset — so they are painted
+     from one place and can't drift apart. */
+  const paintNrg = (i, v, set) => {
+    const inp = document.querySelector(`#sheetBody .tNrg[data-i="${i}"]`);
+    if(!inp) return;
+    const box = inp.closest('.nrg');
+    inp.value = v == null ? Math.round((NRG_MIN + NRG_MAX)/2) : v;
+    const val = box.querySelector('.nrgv');
+    val.innerHTML = v == null ? '—' : v + `<small>/${NRG_MAX}</small>`;
+    val.classList.toggle('on', !!set);
+    box.querySelector('.nrgx').hidden = !set;
+    const d = box.querySelector('.nrgd');
+    d.hidden = !!set;
+    d.textContent = v == null ? 'no bpm' : 'worked out';
+  };
+  document.querySelectorAll('#sheetBody .tNrg').forEach(inp => {
+    inp.onchange = e => {
+      const i = +e.target.dataset.i;
+      const t = tracksOf()[i];
+      t.energy = clamp(Math.round(+e.target.value), NRG_MIN, NRG_MAX);
+      save(); renderAll();
+      paintNrg(i, t.energy, true);
+    };
+  });
+  /* Back to worked-out, which is a real answer and not the same as 5 —
+     so it has to clear the field rather than write a middle value. */
+  document.querySelectorAll('#sheetBody .nrgx').forEach(btn => {
+    btn.onclick = () => {
+      const i = +btn.dataset.i;
+      const o = DB.items.find(x => x.uid === uid);
+      if(!o || !o.tracks[i]) return;
+      o.tracks[i].energy = null;
+      save(); renderAll();
+      const e2 = energyOf(o.tracks[i], o);
+      paintNrg(i, e2.v, e2.set);
+    };
+  });
+
   /* tap tempo — tap along with the record, four taps is enough */
   document.querySelectorAll('#sheetBody .tap').forEach(btn => {
     let taps = [];
@@ -2432,16 +2712,19 @@ function openSheet(uid){
        MusicBrainz to one call a second — so re-asking about a track you
        have already filled in costs real time and buys nothing, since the
        answer could not be used anyway. */
-    const todo = tks.map((t, i) => ({t, i})).filter(({t}) => !t.bpm || !t.key);
+    const gaps = t => ({bpm: !t.bpm, key: !t.key, energy: t.energy == null});
+    const todo = tks.map((t, i) => ({t, i})).filter(({t}) => { const g = gaps(t); return g.bpm || g.key || g.energy; });
     if(!todo.length)
-      return toast('Every track here already has a tempo and a key — nothing to look up', 4600);
+      return toast('Every track here already has a tempo, a key and an energy — nothing to look up', 4600);
     const btn = $('#sLookup');
     btn.disabled = true; spin(true);
     const found = [];
     for(let k = 0; k < todo.length; k++){
       btn.textContent = 'Looking up ' + (k+1) + ' of ' + todo.length + '…';
       const {t, i} = todo[k];
-      found.push({i, t, r: await lookupTempoKey(t.artist || o.artist, t.title || '')});
+      /* Only the gaps are asked for, so a track that just needs an energy
+         doesn't pay for a tempo look-up it would throw away. */
+      found.push({i, t, r: await lookupTempoKey(t.artist || o.artist, t.title || '', gaps(t))});
     }
     spin(false);
     reviewLookups(uid, found);
@@ -2472,7 +2755,7 @@ function openSheet(uid){
     const o = DB.items.find(x=>x.uid===uid);
     o.tracks = o.tracks || [];
     o.tracks.push({pos:String.fromCharCode(65+Math.floor(o.tracks.length/2))+(o.tracks.length%2+1),
-                   title:title||'Untitled', artist:'', dur:'', bpm:null, key:'', genre:''});
+                   title:title||'Untitled', artist:'', dur:'', bpm:null, key:'', genre:'', energy:null});
     save(); renderAll(); openSheet(uid);
   };
 
@@ -2525,9 +2808,10 @@ function reviewLookups(uid, found){
      refuse to write. */
   const fills = f => ({
     bpm: !!(f.r && f.r.bpm && !f.t.bpm),
-    key: !!(f.r && f.r.key && !f.t.key)
+    key: !!(f.r && f.r.key && !f.t.key),
+    energy: !!(f.r && f.r.energy != null && f.t.energy == null)
   });
-  const usable = found.filter(f => { const w = fills(f); return w.bpm || w.key; });
+  const usable = found.filter(f => { const w = fills(f); return w.bpm || w.key || w.energy; });
   if(!usable.length){
     toast('Nothing new found — what these tracks were missing came back empty', 4600);
     openSheet(uid);
@@ -2536,34 +2820,61 @@ function reviewLookups(uid, found){
   const rows = found.map(f => {
     const name = esc(f.t.pos || (f.i + 1)) + ' · ' + esc(f.t.title || 'Untitled');
     const w = fills(f);
-    if(!w.bpm && !w.key)
+    if(!w.bpm && !w.key && !w.energy)
       return `<div class="ed"><div class="top"><b>${name}</b>
         <span style="margin-left:auto;color:var(--dust)">nothing found</span></div></div>`;
-    const now = [f.t.bpm ? f.t.bpm + ' BPM' : '', f.t.key || ''].filter(Boolean).join(' · ') || 'empty';
+    const now = [f.t.bpm ? f.t.bpm + ' BPM' : '', f.t.key || '',
+                 f.t.energy != null ? 'energy ' + f.t.energy : ''
+                ].filter(Boolean).join(' · ') || 'empty';
     const got = [w.bpm ? f.r.bpm + ' BPM' : '',
-                 w.key ? esc(f.r.key) + ' (' + esc(KEYNAME[f.r.key] || '') + ')' : ''
+                 w.key ? esc(f.r.key) + ' (' + esc(KEYNAME[f.r.key] || '') + ')' : '',
+                 w.energy ? 'energy ' + f.r.energy + '/' + NRG_MAX : ''
                 ].filter(Boolean).join(' · ');
     /* If the source also answered something you already have, say that it
        is being kept — otherwise it reads as though it was ignored. */
     const keeping = [f.r.bpm && f.t.bpm ? 'your ' + f.t.bpm + ' BPM' : '',
-                     f.r.key && f.t.key ? 'your ' + f.t.key : ''].filter(Boolean).join(' and ');
+                     f.r.key && f.t.key ? 'your ' + f.t.key : '',
+                     f.r.energy != null && f.t.energy != null ? 'your energy ' + f.t.energy : ''
+                    ].filter(Boolean).join(' and ');
+    /* Two sources can contribute to one row, and they matched different
+       recordings to do it. Naming only the first would put a second
+       source's number behind the first one's match, which reads as
+       corroboration when it is nothing of the kind. */
+    /* The confidence figure is AcousticBrainz's key_strength and describes
+       the key alone, so it is only printed beside the source that actually
+       supplied one. Hung off the energy line it read "71% sure of the key"
+       under a number that was not a key — the precise flavour of
+       confident-and-wrong this panel exists to stop. */
+    const via = (src, matched, conf, fields, name) =>
+      `matched “${esc(matched || '?')}” via ${esc(src)}` +
+      (name && fields.length ? ' for the ' + esc(fields.join(' and ')) : '') +
+      (conf && fields.indexOf('key') >= 0 ? ' · ' + conf + '% sure of the key' : '');
+    const second = (f.r.from2 || []).filter(k => w[k]);
+    /* what the first source is left accounting for */
+    const first = ['bpm','key','energy'].filter(k => w[k] && second.indexOf(k) < 0);
     return `<div class="ed">
       <div class="top"><b>${name}</b></div>
       <label class="bot" style="gap:10px;align-items:center;cursor:pointer">
         <input type="checkbox" class="lkPick" data-i="${f.i}" checked>
         <span><b>${got}</b></span>
       </label>
-      <div class="hint" style="margin:4px 0 0">now ${esc(now)} — matched “${esc(f.r.matched || '?')}”
-        via ${esc(f.r.source)}${f.r.conf ? ' · ' + f.r.conf + '% sure of the key' : ''}${
-        keeping ? ' · keeping ' + esc(keeping) : ''}</div>
+      <div class="hint" style="margin:4px 0 0">now ${esc(now)} — ${
+        second.length
+          ? via(f.r.source, f.r.matched, f.r.conf, first, true) + '<br>' +
+            via(f.r.source2, f.r.matched2, f.r.conf2, second, true)
+          : via(f.r.source, f.r.matched, f.r.conf, first, false)
+      }${keeping ? ' · keeping ' + esc(keeping) : ''}</div>
     </div>`;
   }).join('');
 
   $('#sheetBody').innerHTML = `
-    <h3 style="margin:0 0 4px">Tempo &amp; key found</h3>
+    <h3 style="margin:0 0 4px">Tempo, key &amp; energy found</h3>
     <p class="hint" style="margin:0 0 12px">Only empty boxes are filled — anything you have already
       entered is left alone. Check what each one matched before you accept it: a wrong mix
       will give a confident, wrong number. Untick anything that looks off.</p>
+    <p class="hint" style="margin:0 0 12px">Energy is somebody else's analysis of a recording that
+      may not be your pressing, so treat it as a starting point — the slider on each track is
+      yours to overrule, and an accepted number counts as yours from then on.</p>
     ${rows}
     <div class="row" style="margin-top:14px">
       <button class="btn" id="lkApply">Use the ticked ones</button>
@@ -2586,6 +2897,7 @@ function reviewLookups(uid, found){
       let touched = false;
       if(f.r.bpm && !t.bpm){ t.bpm = f.r.bpm; touched = true; }
       if(f.r.key && !t.key){ t.key = f.r.key; touched = true; }
+      if(f.r.energy != null && t.energy == null){ t.energy = f.r.energy; touched = true; }
       if(touched) n++;
     });
     save(); renderAll();
@@ -3473,8 +3785,9 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>
     <p class="hint"><b>Your data is yours.</b> Everything lives on this device. The CSV export uses Discogs' own column layout, so it imports straight back into your Discogs collection — and their export imports straight into Crate.</p>
     <p class="hint"><b>BPM and key are yours to enter.</b> No database covers 90s 12"s properly, so open a record and type them in per track — or hit Tap along with the record and Crate works the tempo out. Keys use the Camelot wheel, with the musical key shown next to each one.</p>
-    <p class="hint"><b>Or have a look online first.</b> <i>Find tempo &amp; key</i> on a record asks GetSongBPM and AcousticBrainz. Expect gaps — these index streaming catalogues, and white labels, promos and vinyl-only remixes are exactly what they haven't got. It shows you what it matched and how sure it is, and writes nothing until you tick it, because the dangerous answer isn't "not found" — it's a confident number for the wrong mix. Tempo and key data by <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a> and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
-    <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix.</p>
+    <p class="hint"><b>Energy, 1 to 10.</b> Every track shows how hard it hits. Until you say otherwise the number is worked out from the track's own tempo, key and length — and crucially from where that tempo sits <i>among your other records of the same genre</i>, so "fast for a dub record" and "fast for a hard house record" aren't the same number. Nothing is stored while it's being worked out, so it re-reads itself as you fill more tempos in. Drag the slider on any track to overrule it; tap <i>reset</i> to hand it back. A track with no BPM shows — rather than a guess.</p>
+    <p class="hint"><b>Or have a look online first.</b> <i>Find tempo, key &amp; energy</i> on a record asks GetSongBPM and AcousticBrainz. Expect gaps — these index streaming catalogues, and white labels, promos and vinyl-only remixes are exactly what they haven't got. It shows you what it matched and how sure it is, and writes nothing until you tick it, because the dangerous answer isn't "not found" — it's a confident number for the wrong mix. Energy comes from AcousticBrainz only, and out of the same response as the tempo, so asking for it costs no extra look-up. Tempo, key and energy data by <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a> and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
+    <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix. <i>Energy low–high</i> and <i>Energy, then BPM</i> order the same list by how hard things hit, and the ↓ button reverses either — so peak-time first is one tap away.</p>
     <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
     <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;
   $('#scrim').classList.add('on'); $('#sheet').classList.add('on');

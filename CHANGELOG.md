@@ -4,13 +4,34 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.36 - 2026-08-14 15:16
+
+Track energy 1-10: worked out from your own tempo bands, measured free from AcousticBrainz, or set by hand
+
+Every track now shows how hard it hits. Until you say otherwise the number is derived from
+the track's tempo, key and length - and from where that tempo sits among your other records
+of the same genre, so fast for a dub record and fast for a hard house record are not the
+same number. Nothing is stored while it is being worked out, so it re-reads itself as more
+tempos go in. A slider on each track overrules it; reset hands it back.
+
+Find tempo and key is now Find tempo, key and energy. The energy comes out of the same
+AcousticBrainz response as the tempo, so it costs no extra look-up - but a track missing all
+three now calls both sources, which makes the look-up slower on purpose. The review panel
+names which source supplied what, and still writes nothing until you tick it.
+
+Also: Energy low-high and Energy, then BPM sorts, and an energy bar on every track row.
+
+- Modified `app.js` (+342/-29)
+- Modified `index.html` (+3/-1)
+- Modified `styles.css` (+31/-0)
+
 ## 0.12.35 - 2026-08-05 22:01
 
 Sync setup copy no longer assumes the POS app; README describes the three-file split
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on â€” the login has
+scratch. It now leads with the step people actually get stuck on Ã¢â‚¬â€ the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The

@@ -319,6 +319,37 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .bpmv{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--card)}
 .bpmv small{font-size:9px;color:var(--dust);font-weight:400;letter-spacing:.1em}
 
+/* ── energy ───────────────────────────────────────────────────
+   In the track list it is a 5px column, not a number: the row already
+   carries a tempo and a key badge, and a third figure there turns the
+   right-hand end into a wall of digits you stop reading. A bar is
+   scannable down a long list, which is the only way this gets used.
+   Filled from the bottom via a gradient hard-stop rather than a child
+   element, so one span does it and there is no extra node per row on a
+   list that can run to hundreds.
+   Dimmer when the number was worked out, solid when it is yours — the
+   same distinction the record sheet spells out in words. */
+.nrgbar{width:5px;height:20px;border-radius:2px;flex:none;background:
+  linear-gradient(to top, var(--sticker) 0 calc(var(--n) * 10%), var(--groove) calc(var(--n) * 10%) 100%);
+  opacity:.5}
+.nrgbar.set{opacity:1}
+
+/* The sheet's own row. A slider because energy is a feel you nudge, not
+   a figure you know to the decimal — and because it is the one control
+   here you use with a record playing and one hand free. */
+.ed .nrg{display:flex;gap:8px;align-items:center;margin-top:7px}
+.ed .nrg input[type=range]{flex:1 1 auto;width:auto;min-width:0;
+  accent-color:var(--sticker);height:20px;background:none;border:0;padding:0}
+.nrgt{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--dust);flex:none}
+.nrgv{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--dust);flex:none}
+.nrgv.on{color:var(--sticker)}
+.nrgv small{font-size:9px;font-weight:400;color:var(--dust);letter-spacing:.06em}
+.nrgx{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dust);border:1px solid var(--groove);
+  border-radius:6px;padding:5px 7px}
+.nrgd{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--dust)}
+
 /* ── track list (global) ──────────────────────────────────── */
 .tlist{margin-bottom:24px}
 .trow{display:flex;align-items:center;gap:10px;padding:11px 0;
