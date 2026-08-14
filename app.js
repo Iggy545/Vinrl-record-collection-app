@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.37';
+const APP_VERSION = '0.12.38';
 
 const mem = {};
 const store = {
@@ -23,7 +23,7 @@ const store = {
 };
 
 /* ── state ────────────────────────────────────────────────── */
-let DB = { items:[], shelves:['Main'], token:'', curr:'GBP' };
+let DB = { items:[], shelves:['Main'], token:'', curr:'GBP', sets:[] };
 const SYM = {GBP:'£',USD:'$',EUR:'€',AUD:'A$',CAD:'C$',JPY:'¥',SEK:'kr '};
 const sym = () => SYM[DB.curr] || '';
 const $ = s => document.querySelector(s);
@@ -32,6 +32,10 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;'
 async function load(){
   const d = await store.get('crate.db');
   if(d) DB = Object.assign(DB, d);
+  /* Stored data predating saved sets has no field at all, and a half-
+     written one could have anything. Everything downstream reads
+     DB.sets as an array without checking. */
+  if(!Array.isArray(DB.sets)) DB.sets = [];
   $('#tok').value = DB.token || '';
   $('#bpmKey').value = DB.bpmKey || '';
   $('#curr').value = DB.curr || 'GBP';
@@ -99,6 +103,14 @@ var Sync = (function(){
   const isOn = () => ls.get(ON) === '1';
 
   const ser = v => { try{ return JSON.stringify(v); }catch(e){ return ''; } };
+  /* The meta signature, in ONE place. pushMeta() compares against it and
+     applyRemoteMeta() rebuilds it, and if those two ever describe
+     different things the doc re-uploads itself on every incoming update
+     for ever. That is precisely the bug found in the POS app on
+     2026-08-03 — two Firestore writes per cycle on an idle till — so
+     adding a field to the meta doc means adding it here and nowhere
+     else. */
+  const metaSig = () => ser({s: DB.shelves, c: DB.curr, x: DB.sets || []});
   /* Firestore rejects undefined; a JSON round-trip drops those keys */
   const clean = v => JSON.parse(ser(v));
   const docSafe = s => String(s||'').replace(/[\/\.\#\$\[\]]/g,'_').slice(0,120);
@@ -154,8 +166,15 @@ var Sync = (function(){
     let changed = false;
     if(Array.isArray(d.shelves) && ser(d.shelves) !== ser(DB.shelves)){ DB.shelves = d.shelves; changed = true; }
     if(d.curr && d.curr !== DB.curr){ DB.curr = d.curr; changed = true; }
+    /* Sets ride in the meta doc rather than getting a collection of their
+       own: they are a handful of small documents that are always read
+       together, and last-write-wins across the whole list is the same
+       rule the shelf order already lives under. An older device that has
+       never heard of sets sends no field at all, which must not be read
+       as "the user deleted them all" — hence the Array check. */
+    if(Array.isArray(d.sets) && ser(d.sets) !== ser(DB.sets || [])){ DB.sets = d.sets; changed = true; }
     times.meta = ts;
-    metaShadow = ser({s: DB.shelves, c: DB.curr});
+    metaShadow = metaSig();
     return changed;
   }
 
@@ -207,16 +226,17 @@ var Sync = (function(){
   }
   function pushMeta(){
     if(!connected) return;
-    const sig = ser({s: DB.shelves, c: DB.curr});
+    const sig = metaSig();
     if(sig === metaShadow) return;
     const prevShadow = metaShadow, prevTs = times.meta;   /* same trap as pushRecords */
     metaShadow = sig;
     const ts = Date.now(); times.meta = ts; saveTimes();
-    guard(metaDoc.set({shelves: clean(DB.shelves), curr: DB.curr, updatedAt: ts, by: clientId}),
+    guard(metaDoc.set({shelves: clean(DB.shelves), curr: DB.curr,
+                       sets: clean(DB.sets || []), updatedAt: ts, by: clientId}),
       err => {
         metaShadow = prevShadow; times.meta = prevTs; saveTimes();
-        setStatus('your shelf list has not uploaded — tap Sync now to try again', 'err');
-        try{ console.warn('Crate sync: shelf list upload failed', err); }catch(e){}
+        setStatus('your shelf list and sets have not uploaded — tap Sync now to try again', 'err');
+        try{ console.warn('Crate sync: meta upload failed', err); }catch(e){}
       });
   }
 
@@ -3317,14 +3337,19 @@ function buildSet(pool, pts, targetSecs, startBpm, seed){
    that hides it is just a playlist. */
 function transition(prev, c){
   if(!prev) return null;
-  const d = (c.bpm - prev.bpm) / prev.bpm;
-  const pct = (d * 100);
+  /* A saved set can be reopened after its tempos have been edited away,
+     so neither BPM is guaranteed any more. Without both there is no
+     percentage to report and calling it a hard cut would be a guess —
+     `unknown` says so instead of printing NaN%. */
+  const known = prev.bpm > 0 && c.bpm > 0;
+  const d = known ? (c.bpm - prev.bpm) / prev.bpm : null;
   const sameRec = prev.it.uid === c.it.uid;
   const sameSide = sameRec && sideOf(prev.t.pos) && sideOf(prev.t.pos) === sideOf(c.t.pos);
   const inKey = prev.key && c.key ? compatible(prev.key).indexOf(c.key) >= 0 : null;
   return {
-    pct,
-    hard: Math.abs(d) > PITCH_EASY,
+    pct: d == null ? null : d * 100,
+    unknown: !known,
+    hard: d != null && Math.abs(d) > PITCH_EASY,
     letRun: sameSide,
     flip: sameRec && !sameSide,
     inKey
@@ -3363,9 +3388,13 @@ function setChart(seq, pts){
   }
   const total = seq.reduce((a,c) => a + (c.secs || 0), 0) || 1;
   let run = 0;
+  /* A reopened set can contain a track whose tempo has since been
+     cleared, which leaves it with no energy — plotting that as zero
+     would draw a spike to the floor that never happened. It is left off
+     the chart and counted in the line above instead. */
   const dots = seq.map(c => {
     const p = run / total; run += (c.secs || 0);
-    return `<circle cx="${x(p).toFixed(1)}" cy="${y(c.e/NRG_MAX).toFixed(1)}" r="2.7"/>`;
+    return c.e == null ? '' : `<circle cx="${x(p).toFixed(1)}" cy="${y(c.e/NRG_MAX).toFixed(1)}" r="2.7"/>`;
   }).join('');
   return `<svg class="setchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
     role="img" aria-label="Target energy curve with the chosen tracks plotted on it">
@@ -3375,6 +3404,141 @@ function setChart(seq, pts){
 let setCurve = 'build';
 let setSeed = 1;
 let setLast = null;          /* the built set, so export and swap can reach it */
+
+/* ══════════════════════════════════════════════════════════
+   Saving a set
+   A set is stored as REFERENCES, never as a copy of the track data —
+   correct a BPM and every saved set that uses that track should show
+   the correction, which a snapshot would not. The cost is that a
+   reference can rot: the record can be deleted, the tracklist can be
+   re-pulled from Discogs and re-ordered, the track can be renamed.
+   So each reference carries the index AND the title, and resolving
+   tries them in that order, the same way mergeTracks() does. Anything
+   that cannot be found is reported rather than quietly skipped — a set
+   that silently shrinks from 18 tracks to 15 is worse than one that
+   says which three have gone.
+   ══════════════════════════════════════════════════════════ */
+const setId = () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const normT = s => String(s || '').trim().toLowerCase();
+
+function setRow(t, i, it){
+  const e = energyOf(t, it);
+  return {t, i, it, e: e.v, eSet: e.set, bpm: t.bpm, key: t.key || '',
+          artist: t.artist || it.artist, secs: durSecs(t.dur)};
+}
+
+function resolveSet(s){
+  const seq = [], missing = [];
+  (s && s.tracks || []).forEach(ref => {
+    const it = DB.items.find(x => x.uid === ref.uid);
+    if(!it){ missing.push(ref); return; }
+    const tracks = it.tracks || [];
+    /* The stored index first — cheap and right nearly always. It is only
+       trusted when the title still matches, because a re-pulled
+       tracklist can shuffle positions underneath a saved set and hand
+       back a completely different tune at the same index. */
+    let i = ref.i, t = tracks[i];
+    if(!t || (ref.title && normT(t.title) !== normT(ref.title))){
+      const j = tracks.findIndex(x => normT(x.title) === normT(ref.title));
+      if(j < 0){ missing.push(ref); return; }
+      i = j; t = tracks[j];
+    }
+    seq.push(setRow(t, i, it));
+  });
+  return {seq, missing};
+}
+
+/* Deliberately not the running time: that is recomputed from whatever
+   the tracks say NOW, so a set reopened after its durations were filled
+   in reports the length it would actually run to. */
+function openSavedSet(id){
+  const s = (DB.sets || []).find(x => x.id === id);
+  if(!s) return;
+  const {seq, missing} = resolveSet(s);
+  const fallback = seq.length ? typicalSecs(seq) : SET_FALLBACK_SECS;
+  setCurve = CURVES[s.curve] ? s.curve : 'build';
+  setLast = {seq, secs: seq.reduce((a,c) => a + (c.secs || fallback), 0),
+             short: false, fallback, curve: setCurve,
+             target: (s.mins || 90) * 60, savedId: s.id, name: s.name, missing};
+  renderCurvePick();
+  /* The list has to be redrawn too, not just the result: which row is
+     lit comes from setLast.savedId, so without this the open set is
+     never marked as open and the .savedrow.on rule can never fire. */
+  renderSavedSets();
+  renderSetResult();
+  const out = $('#setOut');
+  if(out && out.firstElementChild) out.firstElementChild.scrollIntoView({block:'start', behavior:'smooth'});
+}
+
+function saveCurrentSet(){
+  if(!setLast || !setLast.seq.length) return toast('Build a set first');
+  if(setLast.savedId) return toast('That one is already saved');
+  const when = new Date();
+  const dflt = CURVES[setLast.curve].name + ' · ' +
+               when.toLocaleDateString(undefined, {day:'numeric', month:'short'});
+  const name = prompt('Name this set', dflt);
+  if(name === null) return;
+  const s = {
+    id: setId(),
+    name: name.trim() || dflt,
+    curve: setLast.curve,
+    mins: Math.round(setLast.target / 60),
+    created: when.toISOString(),
+    scope: {shelf: $('#setShelf').value || '', genre: $('#setGenre').value || ''},
+    tracks: setLast.seq.map(c => ({uid: c.it.uid, i: c.i, title: c.t.title || '', pos: c.t.pos || ''}))
+  };
+  DB.sets = DB.sets || [];
+  DB.sets.unshift(s);                 /* newest first — no sort to maintain */
+  save();
+  setLast.savedId = s.id; setLast.name = s.name;
+  renderSets(); renderSetResult();
+  toast('Saved “' + s.name + '”', 3200);
+}
+
+function renameSet(id){
+  const s = (DB.sets || []).find(x => x.id === id); if(!s) return;
+  const name = prompt('Rename this set', s.name);
+  if(name === null) return;
+  s.name = name.trim() || s.name;
+  save(); renderSets();
+  if(setLast && setLast.savedId === id){ setLast.name = s.name; renderSetResult(); }
+  toast('Renamed');
+}
+
+function deleteSet(id){
+  const s = (DB.sets || []).find(x => x.id === id); if(!s) return;
+  if(!confirm('Delete “' + s.name + '”?\n\nThe records are untouched — only the running order goes.')) return;
+  DB.sets = (DB.sets || []).filter(x => x.id !== id);
+  save();
+  if(setLast && setLast.savedId === id) setLast = null;
+  renderSets(); renderSetResult();
+  toast('Deleted');
+}
+
+/* Only drawn when there is something to draw: an empty panel on a tab
+   you have not used yet is just noise. */
+function renderSavedSets(){
+  const el = $('#setSaved'); if(!el) return;
+  const list = DB.sets || [];
+  if(!list.length){ el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = `<div class="eyebrow">Your sets</div>` +
+    list.map(s => {
+      const n = (s.tracks || []).length;
+      /* No year: a set list is a thing you made recently, and the year
+         cost more width than it earned — with it the whole line
+         truncated at 375px. */
+      const when = s.created ? new Date(s.created).toLocaleDateString(undefined, {day:'numeric', month:'short'}) : '';
+      return `<div class="savedrow${setLast && setLast.savedId === s.id ? ' on' : ''}">
+        <button class="savedopen" data-open="${esc(s.id)}">
+          <b>${esc(s.name)}</b>
+          <span>${n} track${n===1?'':'s'} · ${esc((CURVES[s.curve]||{}).name || s.curve)}${when ? ' · ' + esc(when) : ''}</span>
+        </button>
+        <button class="ghost" data-rename="${esc(s.id)}">rename</button>
+        <button class="ghost" data-del="${esc(s.id)}">delete</button>
+      </div>`;
+    }).join('');
+}
 
 function renderCurvePick(){
   const el = $('#curvePick');
@@ -3453,8 +3617,8 @@ function renderSetResult(){
     const note = !tr ? '' : `<div class="trans${tr.hard && !tr.letRun ? ' hard' : ''}">
         ${tr.letRun ? 'let it run — same side'
           : (tr.flip ? 'flip the record · ' : '') +
-            (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% · ' +
-            (tr.hard ? 'hard cut' : 'blend') +
+            (tr.unknown ? 'tempo missing now'
+              : (tr.pct >= 0 ? '+' : '') + tr.pct.toFixed(1) + '% · ' + (tr.hard ? 'hard cut' : 'blend')) +
             (tr.inKey === null ? '' : (tr.inKey ? ' · in key' : ' · key clash'))}
       </div>`;
     return note + `<div class="setrow">
@@ -3465,8 +3629,9 @@ function renderSetResult(){
       </span>
       <span class="num">
         <span class="setat">${at}</span>
-        <span class="nrgbar${c.eSet ? ' set' : ''}" style="--n:${c.e}" title="Energy ${c.e} of ${NRG_MAX}"></span>
-        <span class="bpmv">${c.bpm}</span>
+        <span class="nrgbar${c.eSet ? ' set' : ''}" style="--n:${c.e == null ? 0 : c.e}"
+              title="Energy ${c.e == null ? 'not known' : c.e + ' of ' + NRG_MAX}"></span>
+        <span class="bpmv">${c.bpm > 0 ? c.bpm : '<small>—</small>'}</span>
         ${keyBadge(c.key)}
       </span>
     </div>`;
@@ -3483,18 +3648,25 @@ function renderSetResult(){
     pull.push({it: c.it, first: n + 1, n: seq.filter(x => x.it.uid === c.it.uid).length});
   });
 
+  const saved = !!setLast.savedId;
+  const gone = (setLast.missing || []).length;
   el.innerHTML = `
     <div class="shelfhead" style="margin:22px 0 6px">
-      <div class="eyebrow">${esc(CURVES[curve].name)}</div>
+      <div class="eyebrow">${esc(saved ? setLast.name : CURVES[curve].name)}</div>
       <div class="spacer"></div>
-      <button class="ghost" id="btnSetAgain">another go</button>
+      ${saved ? `<button class="ghost" id="btnSetClose">close</button>`
+              : `<button class="ghost" id="btnSetAgain">another go</button>`}
     </div>
+    ${saved ? `<p class="hint" style="margin:0 0 6px">Saved · ${esc(CURVES[curve].name)}</p>` : ''}
     ${setChart(seq, CURVES[curve].pts)}
     <p class="hint" style="margin:2px 0 0">${seq.length} tracks · about ${hhmm(secs)}${
       short ? ` — that's all the selection could fill, ${hhmm(target)} was asked for` : ''} ·
       ${pull.length} ${pull.length === 1 ? 'sleeve' : 'sleeves'} to pull</p>
     ${short ? `<p class="hint" style="color:var(--warn);margin:6px 0 0">Ran out of records that fit
       the shape. Widen the shelf or genre, or ask for a shorter set.</p>` : ''}
+    ${gone ? `<p class="hint" style="color:var(--warn);margin:6px 0 0">${gone}
+      track${gone===1?'':'s'} in this set ${gone===1?'is':'are'} no longer in your crate —
+      the record was removed or the track renamed. The rest still plays in order.</p>` : ''}
     <div class="eyebrow" style="margin-top:16px">The order</div>
     ${rows}
     <div class="eyebrow" style="margin-top:18px">Pull these</div>
@@ -3505,12 +3677,19 @@ function renderSetResult(){
     </div>`).join('')}</div>
     <div class="row" style="margin-top:16px">
       <button class="btn quiet" id="btnSetCsv">Export this set</button>
-      <button class="btn quiet" id="btnSetAgain2">Another go</button>
-    </div>`;
+      ${saved ? `<button class="btn quiet" id="btnSetDel">Delete this set</button>`
+              : `<button class="btn" id="btnSetSave">Save this set</button>`}
+    </div>
+    ${saved ? '' : `<button class="btn quiet" id="btnSetAgain2" style="margin-top:8px">Another go</button>`}`;
 
   const again = () => { setSeed = (setSeed + 1) | 0; doBuildSet(); };
-  $('#btnSetAgain').onclick = again;
-  $('#btnSetAgain2').onclick = again;
+  if($('#btnSetAgain')) $('#btnSetAgain').onclick = again;
+  if($('#btnSetAgain2')) $('#btnSetAgain2').onclick = again;
+  if($('#btnSetSave')) $('#btnSetSave').onclick = saveCurrentSet;
+  if($('#btnSetDel')) $('#btnSetDel').onclick = () => deleteSet(setLast.savedId);
+  /* Closing puts the tab back to the builder rather than deleting
+     anything — the set is still in the list underneath. */
+  if($('#btnSetClose')) $('#btnSetClose').onclick = () => { setLast = null; renderSets(); renderSetResult(); };
   $('#btnSetCsv').onclick = exportSet;
 }
 
@@ -3551,7 +3730,11 @@ function exportSet(){
             c.key ? KEYNAME[c.key] : '', c.e, c.t.dur || '', locCode(c.it, codes), into]
            .map(cell).join(',');
   });
-  download('crate-set-' + setCurve + '.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
+  /* A saved set exports under its own name — three files called
+     crate-set-build.csv in a downloads folder tell you nothing. */
+  const slug = String(setLast.name || CURVES[setLast.curve].name)
+    .toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40) || 'set';
+  download('crate-set-' + slug + '.csv', [head.join(',')].concat(body).join('\n'), 'text/csv');
 }
 
 function renderSets(){
@@ -3559,6 +3742,7 @@ function renderSets(){
   renderCurvePick();
   renderSetControls();
   renderSetCoverage();
+  renderSavedSets();
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -3793,11 +3977,13 @@ $('#btnJson').onclick = () => {
     version: APP_VERSION,
     exported: new Date().toISOString(),
     records: DB.items.length,
+    sets: (DB.sets || []).length,        /* for the restore prompt to report */
     db: DB,
     sync: Sync.exportSettings()
   };
   download('crate-backup.json', JSON.stringify(backup, null, 2), 'application/json');
-  toast(`Backed up ${DB.items.length} records and your settings`, 3600);
+  const ns = (DB.sets || []).length;
+  toast(`Backed up ${DB.items.length} records${ns ? `, ${ns} set${ns===1?'':'s'}` : ''} and your settings`, 3600);
 };
 $('#btnDj').onclick = () => {
   const rows = allTracks();
@@ -3829,6 +4015,16 @@ $('#curvePick').onclick = e => {
   if(setLast){ setLast = null; renderSetResult(); }
 };
 $('#btnBuildSet').onclick = doBuildSet;
+/* Delegated for the same reason as the curve tiles — the list is rebuilt
+   on every render, so handlers bound to the old buttons would be lost. */
+$('#setSaved').onclick = e => {
+  const open = e.target.closest('[data-open]'),
+        ren  = e.target.closest('[data-rename]'),
+        del  = e.target.closest('[data-del]');
+  if(ren) return renameSet(ren.dataset.rename);
+  if(del) return deleteSet(del.dataset.del);
+  if(open) return openSavedSet(open.dataset.open);
+};
 /* Scope changes redraw the coverage figures, and drop a set that was
    built from a selection you are no longer looking at. */
 $('#setShelf').onchange = $('#setGenre').onchange = () => {
@@ -4186,12 +4382,19 @@ $('#file').onchange = e => {
         if(!db || !Array.isArray(db.items)) throw 0;
 
         const n = db.items.length;
+        const ns = Array.isArray(db.sets) ? db.sets.length : 0;
         const when = d && d.exported ? String(d.exported).slice(0,10) : null;
         if(!confirm(`Replace your crate with this backup?\n\n`
-          + `${n} record${n===1?'':'s'}${when ? `, saved ${when}` : ''}.\n`
-          + `You currently have ${DB.items.length}. This cannot be undone.`)) return;
+          + `${n} record${n===1?'':'s'}${ns ? ` and ${ns} set${ns===1?'':'s'}` : ''}${when ? `, saved ${when}` : ''}.\n`
+          + `You currently have ${DB.items.length} record${DB.items.length===1?'':'s'}`
+          + `${(DB.sets||[]).length ? ` and ${(DB.sets||[]).length} set${(DB.sets||[]).length===1?'':'s'}` : ''}.`
+          + ` This cannot be undone.`)) return;
 
-        DB = Object.assign({items:[], shelves:['Main'], token:'', curr:'GBP'}, db);
+        /* sets:[] in the defaults, so a backup taken before saved sets
+           existed restores to an empty list rather than to undefined —
+           everything downstream reads DB.sets without checking. */
+        DB = Object.assign({items:[], shelves:['Main'], token:'', curr:'GBP', sets:[]}, db);
+        if(!Array.isArray(DB.sets)) DB.sets = [];
         const gotSync = sync ? Sync.importSettings(sync) : false;
 
         /* Write it out now. The old code called load() here, which read
@@ -4206,7 +4409,8 @@ $('#file').onchange = e => {
         fillSyncForm();
         renderAll();
         toast(`Restored ${n} record${n===1?'':'s'}`
-              + (gotSync ? ' and your sync settings' : ''), 4200);
+              + (ns ? ` and ${ns} set${ns===1?'':'s'}` : '')
+              + (gotSync ? ', plus your sync settings' : ''), 4200);
       } else importCsv(r.result);
     }catch(err){ toast('Could not read that file'); }
   };
@@ -4216,7 +4420,7 @@ $('#file').onchange = e => {
 $('#btnWipe').onclick = () => {
   if(!confirm('Delete every record, shelf and setting? This cannot be undone.')) return;
   if(!confirm('Really sure? Export a backup first if you want one.')) return;
-  DB = {items:[], shelves:['Main'], token:'', curr:'GBP'};
+  DB = {items:[], shelves:['Main'], token:'', curr:'GBP', sets:[]};
   save(); $('#tok').value=''; renderAll(); toast('Wiped');
 };
 
@@ -4235,7 +4439,8 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Energy, 1 to 10.</b> Every track shows how hard it hits. Until you say otherwise the number is worked out from the track's own tempo, key and length — and crucially from where that tempo sits <i>among your other records of the same genre</i>, so "fast for a dub record" and "fast for a hard house record" aren't the same number. Nothing is stored while it's being worked out, so it re-reads itself as you fill more tempos in. Drag the slider on any track to overrule it; tap <i>reset</i> to hand it back. A track with no BPM shows — rather than a guess.</p>
     <p class="hint"><b>Or have a look online first.</b> <i>Find tempo, key &amp; energy</i> on a record asks GetSongBPM and AcousticBrainz. Expect gaps — these index streaming catalogues, and white labels, promos and vinyl-only remixes are exactly what they haven't got. It shows you what it matched and how sure it is, and writes nothing until you tick it, because the dangerous answer isn't "not found" — it's a confident number for the wrong mix. Energy comes from AcousticBrainz only, and out of the same response as the tempo, so asking for it costs no extra look-up. Tempo, key and energy data by <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a> and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
     <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix. <i>Energy low–high</i> and <i>Energy, then BPM</i> order the same list by how hard things hit, and the ↓ button reverses either — so peak-time first is one tap away.</p>
-    <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing is saved and nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
+    <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
+    <p class="hint"><b>Keeping a set.</b> <i>Save this set</i> names it and puts it under <i>Your sets</i> at the top of the tab, where you can reopen, rename or delete it. Saved sets go into your backup and sync to your other device like everything else. They keep a <i>reference</i> to each track rather than a copy, so correcting a BPM updates every set that uses it — and if you later delete a record or rename a track, the set says how many have gone rather than quietly getting shorter. Deleting a set never touches the records.</p>
     <p class="hint"><b>It knows these are records.</b> Two tracks off the same side in a row come up as <i>let it run</i> rather than as a mix, going to the other side says <i>flip the record</i>, and it avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
     <p class="hint"><b>Offline.</b> Scanning works without a signal after the first load; lookups queue until you're back online.</p>
     <button class="btn quiet" onclick="document.getElementById('scrim').click()" style="margin-top:14px">Got it</button>`;

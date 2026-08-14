@@ -4,6 +4,28 @@ Every version of Crate, newest first. Written automatically by `scripts\sync.ps1
 Versions are `major.minor.patch` - patch for tweaks and fixes, minor for new
 features, major for a rebuild.
 
+## 0.12.38 - 2026-08-14 15:45
+
+Save your sets: named, synced, backed up, and they survive the crate changing under them
+
+Save this set names a set and puts it under Your sets at the top of the Sets tab, where you
+can reopen, rename or delete it. Saved sets go into your JSON backup and sync to your other
+device alongside your shelves.
+
+A set keeps a reference to each track rather than a copy of it. Correct a BPM and every set
+using that track shows the correction, and the running time is worked out fresh each time
+you open one - so filling in durations later fixes the length of sets you saved weeks ago.
+
+The trade is that a reference can go stale, so each one carries the track title as well as
+its position. If a tracklist gets re-pulled from Discogs and shuffles, the set still finds
+the right tune instead of confidently handing you the wrong one. If you delete a record or
+rename a track, the set tells you how many have gone rather than quietly getting shorter,
+and the rest still plays in order. Deleting a set never touches your records.
+
+- Modified `app.js` (+235/-30)
+- Modified `index.html` (+3/-1)
+- Modified `styles.css` (+17/-0)
+
 ## 0.12.37 - 2026-08-14 15:32
 
 Sets tab: build a set list along an energy curve, with a pull list
@@ -57,7 +79,7 @@ Sync setup copy no longer assumes the POS app; README describes the three-file s
 
 The Setup panel's sync hint told the user to reuse "the same config and login as
 your POS app", which reads as an instruction to anyone else setting Crate up from
-scratch. It now leads with the step people actually get stuck on ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the login has
+scratch. It now leads with the step people actually get stuck on ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the login has
 to be created in the Firebase console first, because there is no sign-up path, so
 a missing account surfaces as "wrong email or password". Reusing another app's
 Firebase project is still mentioned, as an option rather than a requirement. The

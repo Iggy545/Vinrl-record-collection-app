@@ -510,6 +510,23 @@ nav button.on{color:var(--sticker)}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pullrow .pulln{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;color:var(--dust)}
 
+/* Saved sets. The name and its details are one big tap target; rename and
+   delete sit outside it so a mis-tap opens the set rather than losing it. */
+.savedrow{display:flex;align-items:center;gap:8px;padding:9px 0;
+  border-bottom:1px solid var(--groove)}
+.savedrow.on{border-color:var(--sticker)}
+.savedopen{flex:1;min-width:0;text-align:left}
+.savedopen b{display:block;font-size:13.5px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The detail line wraps rather than truncating. At 375px the rename and
+   delete buttons leave it 184px and it wants ~200, so an ellipsis ate the
+   date on every row — and a set's shape and length are the two things you
+   pick it by. The name above it still truncates: those can be any length. */
+.savedopen span{display:block;font-family:var(--mono);font-size:10.5px;
+  color:var(--dust);line-height:1.4}
+.savedrow.on .savedopen b{color:var(--sticker)}
+.savedrow .ghost{flex:none}
+
 /* ── toast ────────────────────────────────────────────────── */
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));
   transform:translate(-50%,14px);z-index:80;background:var(--card);color:var(--ink);
