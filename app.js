@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.42';
+const APP_VERSION = '0.12.43';
 
 const mem = {};
 const store = {
@@ -2230,7 +2230,7 @@ function renderTracks(){
       lastKey = t.key;
       html += `<div class="keyhead"><b>${t.key || 'NO KEY'}</b><span>${t.key?KEYNAME[t.key]:'not set yet'}</span></div>`;
     }
-    html += `<button class="trow" data-uid="${it.uid}">
+    html += `<button class="trow" data-uid="${it.uid}" data-i="${i}">
       ${it.art?`<img class="art" src="${esc(it.art)}" alt="" loading="lazy">`:'<span class="art"></span>'}
       <span class="who">
         <b>${esc(t.title || 'Untitled')}</b>
@@ -2404,6 +2404,233 @@ function updateArrangeBar(){
   paintSel();          /* which surface shows ticks follows the arrange flags */
 }
 
+/* ── tagging a run of tracks with one genre ─────────────────
+   "Set genre for every track" on the record sheet covers one sleeve.
+   This covers a run of them, which is how genre actually arrives: a
+   whole shelf of hard house, everything on a label, every track a
+   search turned up.
+
+   Deliberately NOT the `ticked` set from arranging. That one only
+   exists inside arrange mode, which is sleeve view, sorted by shelf
+   order, un-reversed — so narrowing to a label or searching first, the
+   very thing that gathers records sharing a genre, switches it off. So
+   this is its own mode, live under any sort or filter, on both surfaces.
+
+   The set holds one entry per TRACK even when you tick a sleeve, because
+   a track is what gets written. A sleeve is shorthand for all of its
+   tracks — which is what makes a part-ticked record possible, and why
+   the grid draws a dashed outline as well as a solid tick. It also means
+   the ticks survive switching between Sleeves and Tracks. */
+let tagMode = false;
+const tagged = new Set();
+/* One step back from the last apply, dropped the moment anything else
+   happens. Kept out of undoStack on purpose: that holds placement()
+   snapshots and undoLast renumbers every shelf after restoring one,
+   which would be nonsense here — no record has moved. */
+let tagUndo = null;
+
+/* '#' is safe as the separator: both uid generators produce [a-z0-9-]
+   only ('r<releaseId>-<rand>' and 'i<time><rand>'), so no uid can hold
+   one and no two records can collide on a key. */
+const tagKey = (uid, i) => uid + '#' + i;
+/* Resolved fresh on every read, never cached. Sync replaces DB.items
+   wholesale, so a held track object would quietly write the genre into a
+   copy that is no longer in the collection. Same rule as setFilterSel. */
+function taggedTracks(){
+  const out = [];
+  DB.items.forEach(it => (it.tracks || []).forEach((t, i) => {
+    if(tagged.has(tagKey(it.uid, i))) out.push({it, t, i});
+  }));
+  return out;
+}
+
+function paintTag(){
+  document.querySelectorAll('.rec.tag,.rec.tagsome,.trow.tag')
+    .forEach(n => n.classList.remove('tag','tagsome'));
+  if(!tagMode || !tagged.size) return;
+  if(MODE === 'tracks'){
+    document.querySelectorAll('#tlist .trow[data-i]').forEach(n => {
+      if(tagged.has(tagKey(n.dataset.uid, +n.dataset.i))) n.classList.add('tag');
+    });
+    return;
+  }
+  document.querySelectorAll('#grid .rec[data-uid]').forEach(n => {
+    const it = DB.items.find(x => x.uid === n.dataset.uid);
+    const tks = (it && it.tracks) || [];
+    if(!tks.length) return;
+    const on = tks.filter((t, i) => tagged.has(tagKey(it.uid, i))).length;
+    if(on) n.classList.add(on === tks.length ? 'tag' : 'tagsome');
+  });
+}
+
+function updateTagBar(){
+  const bar = $('#tagBar'); if(!bar) return;
+  $('#btnTagGenre').textContent = tagMode ? 'done tagging' : 'tag genre';
+  document.querySelectorAll('[data-tag-when]').forEach(b => b.style.display = tagMode ? '' : 'none');
+  const n = tagged.size;
+  $('#btnTagNone').disabled = !n;
+  $('#btnTagApply').disabled = !n;
+  /* The undo offer outlives the mode: turning tagging off after a wrong
+     genre is the most likely next tap, and losing the way back there
+     would be the worst possible moment for it. */
+  const u = $('#btnTagUndo');
+  u.style.display = tagUndo ? '' : 'none';
+  if(tagUndo) u.textContent = 'undo · ' + tagUndo.list.length + ' back to before';
+  const note = $('#tagNote');
+  note.style.display = tagMode ? '' : 'none';
+  if(!tagMode) return;
+  if(!n){
+    note.textContent = MODE === 'tracks'
+      ? 'Tap tracks to tick them' : 'Tap sleeves to tick every track on them';
+    return;
+  }
+  const recs = new Set(taggedTracks().map(x => x.it.uid)).size;
+  note.textContent = n + ' track' + (n === 1 ? '' : 's') + ' on ' +
+    recs + ' record' + (recs === 1 ? '' : 's') + ' ticked';
+}
+
+/* Turning tagging on puts arranging away, and vice versa — both want the
+   same tap on the same tile, and a tap that could either tick or lift is
+   the sort of thing you only find out about after it has moved something. */
+function exitTag(){
+  tagMode = false; tagged.clear();
+}
+
+function toggleTag(uid, i){
+  const k = tagKey(uid, i);
+  if(tagged.has(k)) tagged.delete(k); else tagged.add(k);
+  tagUndo = null;
+  paintTag(); updateTagBar();
+}
+
+/* A sleeve is shorthand for all of its tracks: if any are still untagged
+   the tap takes the lot, otherwise it drops the lot. Anything cleverer
+   makes a part-ticked record impossible to finish off in one tap. */
+function toggleRecTag(uid){
+  const it = DB.items.find(x => x.uid === uid);
+  const tks = (it && it.tracks) || [];
+  if(!tks.length) return toast('No tracklist on that one yet — nothing to tag', 3400);
+  const all = tks.every((t, i) => tagged.has(tagKey(uid, i)));
+  tks.forEach((t, i) => {
+    const k = tagKey(uid, i);
+    if(all) tagged.delete(k); else tagged.add(k);
+  });
+  tagUndo = null;
+  paintTag(); updateTagBar();
+}
+
+/* "All" means what is on screen, filters and search included — the same
+   promise the arrange bar's select all makes. In Tracks that is the rows
+   themselves; in Sleeves it is every track on every visible record, so
+   records with no tracklist are counted out loud rather than quietly
+   contributing nothing. */
+function tagAllVisible(){
+  if(MODE === 'tracks'){
+    visibleTracks().rows.forEach(({it, i}) => tagged.add(tagKey(it.uid, i)));
+    tagUndo = null;
+    paintTag(); updateTagBar();
+    return toast(tagged.size + (tagged.size === 1 ? ' track ticked' : ' tracks ticked'));
+  }
+  let empty = 0;
+  visible().forEach(it => {
+    const tks = it.tracks || [];
+    if(!tks.length){ empty++; return; }
+    tks.forEach((t, i) => tagged.add(tagKey(it.uid, i)));
+  });
+  tagUndo = null;
+  paintTag(); updateTagBar();
+  toast(tagged.size + (tagged.size === 1 ? ' track ticked' : ' tracks ticked') +
+    (empty ? ' · ' + empty + (empty === 1 ? ' record has' : ' records have') + ' no tracklist yet' : ''), 3600);
+}
+
+/* The list is every genre already in the collection — the same one the
+   track box and the genre filter read — so tagging in bulk can only
+   spread a genre you actually use. Typing is still there for a new one.
+   The count is on the sheet because this is the last point before it
+   writes, and 214 tracks is a very different decision to 3. */
+function openGenrePicker(){
+  const sel = taggedTracks();
+  if(!sel.length) return;
+  const recs = new Set(sel.map(x => x.it.uid)).size;
+  const gl = genreList();
+  const rows = gl.map((g, i) => {
+    const n = sel.filter(x => (x.t.genre || '') === g).length;
+    return `<button class="pick" data-g="${i}">
+      <span class="who"><b>${esc(g)}</b>
+        <span>${n ? n + ' of the ticked ' + (n === 1 ? 'one is' : 'ones are') + ' already' : 'in your collection'}</span>
+      </span>
+      <span class="add">set</span>
+    </button>`;
+  }).join('');
+
+  $('#sheetBody').innerHTML = `
+    <h3 style="margin:0 0 4px">Genre for ${sel.length} track${sel.length === 1 ? '' : 's'}</h3>
+    <p class="hint" style="margin:0 0 12px">across ${recs} record${recs === 1 ? '' : 's'}.
+      Pick one you already use, or type a new one. This writes to the tracks —
+      <i>undo</i> in the tag bar puts them all back if it wasn't what you meant.</p>
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="tagNew" list="genreOpts" placeholder="Or type a genre"
+             autocomplete="off" spellcheck="false">
+      <button class="btn" id="tagSet" style="flex:0 0 68px">Set</button>
+    </div>
+    <datalist id="genreOpts">${gl.map(g => `<option value="${esc(g)}">`).join('')}</datalist>
+    ${gl.length ? `<div class="picklist">${rows}</div>`
+                : '<p class="hint">No genres anywhere yet — type the first one above.</p>'}
+    <button class="btn quiet" id="tagWipe" style="margin-top:12px">Clear the genre on all ${sel.length}</button>`;
+
+  $('#sheetBody').querySelectorAll('.pick').forEach(b => {
+    b.onclick = () => applyTagGenre(gl[+b.dataset.g]);
+  });
+  $('#tagSet').onclick = () => applyTagGenre($('#tagNew').value.trim());
+  $('#tagNew').onkeydown = e => { if(e.key === 'Enter') $('#tagSet').click(); };
+  /* Clearing is the only way back from a genre typed on 200 tracks, so it
+     is a button rather than an empty box you have to guess at. Confirmed,
+     because unlike setting one it cannot be told from a misfire. */
+  $('#tagWipe').onclick = () => {
+    if(!confirm('Clear the genre on all ' + sel.length + ' ticked track' +
+      (sel.length === 1 ? '' : 's') + '?')) return;
+    applyTagGenre('');
+  };
+  $('#scrim').classList.add('on');
+  $('#sheet').classList.add('on');
+}
+
+function applyTagGenre(val){
+  const sel = taggedTracks();
+  if(!sel.length) return;
+  /* Fold onto an existing genre's spelling rather than adding "house"
+     beside "House": genreList(), the filter and the Sets picker are all
+     built from these strings, so a case difference makes two genres out
+     of one and neither shows the whole lot. */
+  const known = val ? genreList().find(g => g.toLowerCase() === val.toLowerCase()) : '';
+  const v = val ? (known || val) : '';
+  tagUndo = {to: v, list: sel.map(({it, i, t}) => ({uid: it.uid, i, was: t.genre || ''}))};
+  sel.forEach(({t}) => t.genre = v);
+  /* The ticks stay. Applying the same genre twice is harmless — unlike a
+     bulk move, which is why afterBulk drops them — and getting the
+     spelling right on the second go is the common case. */
+  closeSheet();
+  save(); renderAll();
+  toast(v ? sel.length + (sel.length === 1 ? ' track' : ' tracks') + ' set to ' + v
+          : 'Genre cleared on ' + sel.length + (sel.length === 1 ? ' track' : ' tracks'), 3600);
+}
+
+function undoTagGenre(){
+  if(!tagUndo) return;
+  let done = 0;
+  tagUndo.list.forEach(({uid, i, was}) => {
+    const it = DB.items.find(x => x.uid === uid);
+    const t = it && (it.tracks || [])[i];
+    if(!t) return;      /* the record or that track has gone since — say so */
+    t.genre = was; done++;
+  });
+  const gone = tagUndo.list.length - done;
+  tagUndo = null;
+  save(); renderAll();
+  toast('Put ' + done + (done === 1 ? ' track' : ' tracks') + ' back' +
+    (gone ? ' — ' + gone + ' no longer in your crate' : ''), 3600);
+}
+
 /* Drawn from DB.sets each time rather than from what the button captured,
    so renaming or deleting the set while it is being viewed is reflected
    immediately — and a set deleted underneath the filter turns it off
@@ -2441,6 +2668,9 @@ function renderList(){
   if(MODE==='sleeves') renderGrid(); else renderTracks();
   paintPicked();
   paintSel();
+  /* Same reason as paintSel: both surfaces are rebuilt from scratch here,
+     so a tick set once would not survive the next save. */
+  paintTag(); updateTagBar();
   /* Must be here, not only in renderShelfGrid: that runs BEFORE
      renderCrate rebuilds the rail from scratch, so the open record's
      spine lost its lift and its sleeve on every redraw — a grade edit,
@@ -3945,6 +4175,16 @@ $('#clearF').onclick = () => {
 };
 
 document.addEventListener('click', e => {
+  /* While tagging, a tap ticks instead of opening — but only on the two
+     surfaces that actually paint ticks. A rail spine still opens the
+     record, the same rule the arrange selection follows: a tick you
+     cannot see is a lie about what the next tap will do. */
+  if(tagMode){
+    const trw = e.target.closest('#tlist .trow');
+    if(trw){ toggleTag(trw.dataset.uid, +trw.dataset.i); return; }
+    const sleeve = e.target.closest('#grid .rec');
+    if(sleeve){ toggleRecTag(sleeve.dataset.uid); return; }
+  }
   const rec = e.target.closest('.rec, .spine');
   if(rec){ openSheet(rec.dataset.uid); return; }
   /* a track row answers "where is it", not "tell me about it" — the
@@ -4238,6 +4478,9 @@ $('#btnShelfEdit').onclick = () => {
    dense and the order survives a reload and syncs to your devices. */
 $('#btnArrange').onclick = () => {
   recEdit = !recEdit;
+  /* Tagging goes away when arranging comes on — see btnTagGenre for why.
+     renderList, not updateArrangeBar, so the tag bar redraws with it. */
+  if(recEdit && tagMode){ exitTag(); renderList(); }
   if(!recEdit){ setPicked(null); if(!crateEdit) return exitSel(); }
   updateArrangeBar();
 };
@@ -4273,6 +4516,27 @@ document.querySelectorAll('[data-sel-place]').forEach(b => b.onclick = () => {
   selPlacing = !selPlacing;
   repaintSel();
 });
+
+/* ── the tag-genre bar ──────────────────────────────────────
+   Wired next to the arrange bar's buttons because the two are mutually
+   exclusive and it should be obvious here that they are. */
+$('#btnTagGenre').onclick = () => {
+  tagMode = !tagMode;
+  tagged.clear(); tagUndo = null;
+  /* Arranging and tagging both want the same tap on the same tile, so
+     turning one on puts the other away rather than leaving a tap whose
+     meaning depends on which bar you last looked at. */
+  if(tagMode){
+    recEdit = false; crateEdit = false;
+    setPicked(null);
+    selMode = false; ticked.clear(); selPlacing = false;
+  }
+  renderList();
+};
+$('#btnTagAll').onclick = tagAllVisible;
+$('#btnTagNone').onclick = () => { tagged.clear(); tagUndo = null; paintTag(); updateTagBar(); };
+$('#btnTagApply').onclick = openGenrePicker;
+$('#btnTagUndo').onclick = undoTagGenre;
 
 (function wireRecordDrag(){
   const grid = $('#grid');
@@ -4365,6 +4629,7 @@ document.querySelectorAll('[data-sel-place]').forEach(b => b.onclick = () => {
    as the visible window. */
 $('#btnCrateArrange').onclick = () => {
   crateEdit = !crateEdit;
+  if(crateEdit && tagMode){ exitTag(); renderList(); }
   if(!crateEdit){
     setPicked(null);                    /* don't leave one lifted */
     if(!recEdit) return exitSel();      /* nor a set ticked with no bar to act on it */
@@ -4547,6 +4812,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
     <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
+    <p class="hint"><b>Filing a lot of tracks under one genre.</b> Tap <i>tag genre</i> above the list and a tap ticks instead of opening. In <i>Tracks</i> you tick tracks one by one; in <i>Sleeves</i> a tap ticks every track on that record, and a dashed outline means only some of them are ticked. <i>Select all</i> takes what's on screen, filters and search included — so narrow to a shelf, a label or a search first and one tap has the whole run. <i>Set genre…</i> then offers every genre you already use, or a box to type a new one, and tells you how many tracks across how many records are about to change. If it wasn't what you meant, <i>undo</i> in the same row puts every one of them back exactly as it was. The ticks stay put afterwards, so correcting a spelling is one more tap. This is separate from <i>arrange records</i> — turning either on puts the other away, because a tap can't mean two things at once.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>You pick the pressing.</b> One barcode often matches a dozen releases — the original, the reissue, the promo, a foreign copy — and they carry different tracklists and different prices. When there's more than one, Crate shows them all and files nothing until you choose. A queued scan waits as <i>pick one</i> until you tap it, so nothing is lost if you're busy.</p>
     <p class="hint"><b>Values are condition-adjusted.</b> Discogs shows the lowest price anyone is asking, for any condition. Crate grades that against the Goldmine standard using the media and sleeve grades you set, so a G+ copy isn't valued like a Mint one.</p>

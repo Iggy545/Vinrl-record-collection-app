@@ -200,8 +200,28 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .rec.sel .sleeve::after{content:'✓';position:absolute;top:6px;left:6px;
   width:21px;height:21px;border-radius:50%;background:var(--ok);color:var(--ink);
   font-size:12px;font-weight:700;display:grid;place-items:center}
+/* ticked for a bulk genre. Orange rather than the arrange green, because
+   the two selections mean different things and can look identical on a
+   phone otherwise — one is about to move records, the other about to
+   write to them. A record whose tracks are only partly ticked gets a
+   dashed outline and no badge: a solid tick there would claim the whole
+   sleeve is going to change when only some of it is. */
+.rec.tag{animation:none}
+.rec.tag .sleeve{outline:2px solid var(--sticker);outline-offset:3px}
+.rec.tag .sleeve::after{content:'✓';position:absolute;top:6px;left:6px;
+  width:21px;height:21px;border-radius:50%;background:var(--sticker);color:var(--sticker-ink);
+  font-size:12px;font-weight:700;display:grid;place-items:center}
+.rec.tagsome{animation:none}
+.rec.tagsome .sleeve{outline:2px dashed var(--sticker);outline-offset:3px}
+/* A halo rather than a left bar or extra padding: the rows are flush to
+   the edge of the list, so anything that adds width would shunt every
+   ticked row sideways as you tap down the list. */
+.trow.tag{background:rgba(255,95,31,.10);
+  box-shadow:0 0 0 6px rgba(255,95,31,.10)}
+.trow.tag .who b{color:var(--sticker)}
 .selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-2px 0 12px}
 .selbar .ghost{flex:none}
+.selbar .eyebrow{margin:0}
 .ghost:disabled{opacity:.38;pointer-events:none}
 
 /* ── grid ─────────────────────────────────────────────────── */

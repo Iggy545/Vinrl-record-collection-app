@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=0.12.42">
+<link rel="stylesheet" href="styles.css?v=0.12.43">
 </head>
 <body>
 
@@ -151,6 +151,15 @@
     <button class="ghost" data-sel-when data-sel-all="grid">select all</button>
     <button class="ghost" data-sel-when data-sel-none>clear</button>
     <button class="ghost" data-sel-when data-sel-place>place them</button>
+  </div>
+
+  <div class="selbar" id="tagBar">
+    <button class="ghost" id="btnTagGenre">tag genre</button>
+    <button class="ghost" data-tag-when id="btnTagAll">select all</button>
+    <button class="ghost" data-tag-when id="btnTagNone">clear</button>
+    <button class="ghost" data-tag-when id="btnTagApply">set genre…</button>
+    <button class="ghost" id="btnTagUndo" style="display:none">undo that</button>
+    <div class="eyebrow" id="tagNote" style="display:none;flex-basis:100%"></div>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -328,6 +337,6 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
 <div id="toast" role="status"></div>
 
-<script src="app.js?v=0.12.42"></script>
+<script src="app.js?v=0.12.43"></script>
 </body>
 </html>
