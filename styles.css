@@ -459,13 +459,65 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .scrim{position:fixed;inset:0;background:rgba(8,5,12,.72);z-index:60;
   opacity:0;pointer-events:none;transition:opacity .22s}
 .scrim.on{opacity:1;pointer-events:auto}
-.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;max-height:88vh;overflow-y:auto;
+/* 72vh, not the 88vh it was: at 88vh the record sheet left a 91px sliver
+   of screen and you could not see the crate it was describing. 72vh
+   leaves ~210px, which is the lit shelf tile and the popped record.
+   z-index 62 because the locator lifts the crate rail to 61 to get it
+   out from under the scrim — see the spotlight block below. */
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:62;max-height:72vh;overflow-y:auto;
   background:var(--wax);border-top:1px solid var(--groove);
   border-radius:16px 16px 0 0;box-shadow:var(--shadow);
   transform:translateY(100%);transition:transform .28s cubic-bezier(.22,1,.36,1);
   padding:8px 16px calc(28px + env(safe-area-inset-bottom))}
 .sheet.on{transform:none}
 .grip{width:38px;height:4px;border-radius:2px;background:var(--groove);margin:6px auto 14px}
+
+/* ── the locator's spotlight ────────────────────────────────
+   Tapping a track pops the record out of the rail, and until v0.12.46
+   you never once saw it happen. Measured on a 375-wide phone: the sheet
+   was 383px of a 760px screen and its top edge sat at y377, while the
+   popped record sat at y458–642 — entirely underneath it. The one thing
+   still on screen, the lit shelf tile, was under a 72% scrim at 28%
+   brightness. Hence "very dark".
+
+   The fix is to lift the rail and the lit tile OUT of the scrim rather
+   than to lighten it: dimming everything equally is what buried the
+   record in the first place, and a spotlight says "here, this one".
+
+   .view.on carries `animation:rise … both`, which animates opacity and
+   transform, so it is a permanent stacking context — nothing inside it
+   can be raised above a z-index:60 scrim, however large the number.
+   Killing that animation while locating is what lets the rail out, and
+   it is safe: the animation finished long before, and the end state it
+   is filling (opacity:1, transform:none) is the base value anyway.
+   If .view.on ever stops animating a stacking-context property, this
+   rule becomes dead weight rather than wrong. */
+body.locating #v-crate{animation:none}
+body.locating .crate-rail{position:relative;z-index:61}
+/* .tilelit, not .locating: the lit tile is raised over the sticky top
+   bar as well as out of the scrim, so it is only worth doing when
+   spotlightRail has worked out that it will clear it. */
+body.locating.tilelit .shelfTile.here{position:relative;z-index:61}
+/* The rail's own background stops at the crate box, so lifting it above
+   the scrim leaves the gap over the spines showing the dimmed page
+   behind. Giving the lifted rail the page colour keeps the popped
+   sleeve reading against something solid. */
+body.locating .crate-rail{background:var(--ink)}
+
+/* The locator is read standing at the crate, so it carries only what
+   you act on: the code, where it sits, and the two sleeves either side.
+   Half the screen for a five-second answer was the complaint. */
+.sheet.compact{padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+.sheet.compact .grip{margin:4px auto 10px}
+.sheet.compact .loctitle{margin:0 0 6px;min-width:0}
+.sheet.compact .loctitle b{display:block;font-size:15px;font-weight:600;line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Scoped to .compact, never applied to .chips/.ruler themselves — the
+   record sheet's "Where it is" renders the same locatorHtml() and must
+   keep its roomier spacing. */
+.sheet.compact .chips{margin:0}
+.sheet.compact .ruler{margin:8px 0 6px}
+.sheet.compact .row{margin-top:10px}
 .sheet-head{display:flex;gap:14px}
 .sheet-head img{width:96px;height:96px;object-fit:cover;border-radius:4px;flex:none;background:var(--ink)}
 .sheet-head h3{margin:0 0 4px;font-size:18px;line-height:1.25}

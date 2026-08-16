@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.45';
+const APP_VERSION = '0.12.46';
 
 const mem = {};
 const store = {
@@ -2046,7 +2046,11 @@ function paintHere(){
    is scrolled off is no help. Only scroll when the record has actually
    changed, or re-rendering the sheet after a grade edit would yank the
    page about under your thumb. */
-function showHere(uid){
+/* keepScroll: the locator does its own, larger vertical scroll to lift
+   the rail clear of the sheet (spotlightRail). Two smooth scrolls on the
+   same axis fight, and the tile's block:'center' wins the race often
+   enough to look like a bug, so the caller can take the job on. */
+function showHere(uid, keepScroll){
   const changed = hereUid !== uid;
   hereUid = uid;
   /* The rail is drawn before this runs, so it was built by crateList()
@@ -2059,7 +2063,18 @@ function showHere(uid){
   /* Bring the popped record into the rail's view. block:'nearest' so
      scrolling the rail sideways doesn't also jerk the page up or down. */
   const sp = document.querySelector('#crate .spine.here');
-  if(sp) sp.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});
+  if(sp && keepScroll){
+    /* scrollIntoView has no way to say "horizontal only" — block:'nearest'
+       still moves the page when the spine is off-screen, which is exactly
+       when the locator has just opened. Drive the rail's own scrollLeft
+       instead, so the page is left entirely to spotlightRail. */
+    const rail = $('#crate');
+    rail.scrollLeft += sp.getBoundingClientRect().left - rail.getBoundingClientRect().left
+                     - (rail.clientWidth - sp.offsetWidth) / 2;
+  } else if(sp){
+    sp.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});
+  }
+  if(keepScroll) return;
   const tile = document.querySelector('.shelfTile.here');
   if(!tile) return;
   const r = tile.getBoundingClientRect();
@@ -2815,22 +2830,86 @@ function locatorHtml(it){
     </p>`;
 }
 
+/* Scroll the crate rail up into the band of screen the sheet leaves
+   clear, so the record it has just popped out is actually looked at
+   rather than described. showHere's own scrolling is deliberately
+   minimal — block:'nearest', so re-rendering the sheet never yanks the
+   page — which is right everywhere else and not enough here.
+
+   Measured against the sheet rather than a constant: the locator is
+   short and the record sheet is 72vh, so a hard-coded offset would be
+   wrong for one of them. The sheet's height is readable the moment its
+   markup is in, translateY not affecting layout height. */
+/* Both declared above the function that reads them, not below it — a
+   const used above its declaration sits in the temporal dead zone, and
+   that has bitten this file before. */
+const SPOT_GAP = 14;                 /* breathing room over the sheet */
+/* What the record settles for when fitting the shelf tile in as well:
+   fully on screen rather than comfortably so. Held apart from SPOT_GAP
+   because using the roomier figure for both lost the tile by THREE
+   pixels on a 760px screen — the exact size Iggy's phone reports. */
+const SPOT_MIN = 4;
+const TOPBAR_H = 56;                 /* the sticky bar the rail must clear */
+function spotlightRail(){
+  const rail = document.querySelector('.crate-rail'), sheet = $('#sheet');
+  if(!rail || !sheet) return;
+  const r = rail.getBoundingClientRect();
+  if(!r.height) return;              /* Crate view isn't the one on screen */
+  const clear = window.innerHeight - sheet.getBoundingClientRect().height;
+  /* Sit the rail on the sheet, but never push it under the sticky top
+     bar to do it — a tall rail on a short screen keeps its top instead. */
+  let by = r.top - Math.max(TOPBAR_H, clear - SPOT_GAP - r.height);
+
+  /* Then try to fit the lit shelf tile in as well. Lifting the tile out
+     of the scrim also lifts it over the sticky top bar, so a tile that
+     lands under the bar gets painted across the CRATE wordmark — which
+     is what the first cut of this did. Rather than give the tile up on
+     a phone-sized screen, scroll a little less so it clears the bar.
+
+     What makes that affordable is that the rail is 26px of padding
+     taller than its spines, and that padding is background: it can slide
+     under the sheet with nothing lost. So the test is the popped SPINE's
+     bottom edge, not the rail's — the record is the thing being pointed
+     at and it never gives up its place to the tile. */
+  const tile = document.querySelector('.shelfTile.here');
+  const sp = document.querySelector('#crate .spine.here');
+  if(tile && sp){
+    const byTile = tile.getBoundingClientRect().top - TOPBAR_H;
+    if(byTile < by && sp.getBoundingClientRect().bottom - byTile <= clear - SPOT_MIN) by = byTile;
+  }
+  /* Predicted from the scroll about to be made rather than measured
+     after it: the scroll is smooth and asynchronous, so there is no
+     honest moment to measure at. Carried on <body> so paintHere()
+     rebuilding the tiles cannot drop it mid-locate. */
+  document.body.classList.toggle('tilelit',
+    !!tile && tile.getBoundingClientRect().top - by >= TOPBAR_H);
+
+  window.scrollBy({top: by, behavior:'smooth'});
+}
+
 function openLocator(uid){
   const it = DB.items.find(x => x.uid === uid); if(!it) return;
+  /* No eyebrow and no hint paragraph: standing at the crate you want the
+     code, the position and the two neighbours, and this used to spend
+     half the screen saying so. The guidance the hint carried is what the
+     neighbours line now shows directly. */
   $('#sheetBody').innerHTML = `
-    <div class="eyebrow" style="margin-top:4px">Where to find it</div>
-    <h3 style="margin:0 0 2px;font-size:18px;line-height:1.25">${esc(it.title)}</h3>
-    <div class="meta">${esc(it.artist)}</div>
+    <div class="loctitle">
+      <b>${esc(it.title)}</b>
+      <div class="meta">${esc(it.artist)}</div>
+    </div>
     ${locatorHtml(it)}
-    <p class="hint">Counted from the front. If the crate has drifted, go by the two
-      records either side rather than the number.</p>
-    <div class="row" style="margin-top:14px">
+    <div class="row">
       <button class="btn quiet" id="locOpen">Open the record</button>
     </div>`;
   $('#locOpen').onclick = () => openSheet(uid);
-  showHere(uid);
+  /* true = leave the vertical scrolling to spotlightRail, or its
+     block:'center' on the shelf tile fights this one all the way down. */
+  showHere(uid, true);
   $('#scrim').classList.add('on');
-  $('#sheet').classList.add('on');
+  $('#sheet').classList.add('on','compact');
+  document.body.classList.add('locating');
+  requestAnimationFrame(spotlightRail);
 }
 
 /* ── detail sheet ─────────────────────────────────────────── */
@@ -2846,6 +2925,12 @@ function openSheet(uid){
      would drop you out of editing mid-job. */
   if(openUid !== uid) trackEdit = false;
   openUid = uid;
+  /* Both are the locator's, and this sheet is reached straight from it
+     via "Open the record" — leaving them on would keep the rail lifted
+     out of the scrim underneath a full-height sheet, and keep the
+     compact spacing on a sheet that is anything but. */
+  $('#sheet').classList.remove('compact');
+  document.body.classList.remove('locating','tilelit');
   showHere(uid);            /* light up the crate this one lives in */
   const v = itemValue(it);
   $('#sheetBody').innerHTML = `
@@ -3323,7 +3408,8 @@ function closeSheet(){
      record that is no longer open would leave the spines on screen
      disagreeing with crateList(), which is what "select all" reads. */
   renderCrate(); paintHere();
-  $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on');
+  $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on','compact');
+  document.body.classList.remove('locating','tilelit');
 }
 
 /* ══════════════════════════════════════════════════════════
