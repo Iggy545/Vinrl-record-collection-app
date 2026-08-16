@@ -183,8 +183,20 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
    green means ticked for a bulk one. */
 .spine.here{transform:translateY(-38px);width:86px;z-index:7;
   outline:2px solid var(--card);outline-offset:1px;box-shadow:var(--shadow)}
-.spine .pop{position:absolute;left:0;top:0;width:100%;height:86px;
-  object-fit:cover;display:block}
+/* Full height, not the 86px square it was: the square left the bottom
+   half of a spotlit record showing bare gradient, which reads as an
+   image that failed to load rather than as a sleeve.
+
+   Two layers, because a square cover and an 86×184 spine cannot both be
+   satisfied by one. `.popbg` is the same image blown up and blurred to
+   fill the space; `.pop` is the cover itself at its true proportions on
+   top of it. `cover` alone was tried and rejected — it crops a square
+   sleeve to its centre 47%, which cut the artist and title off both
+   sides of the only thing the locator is pointing at. */
+.spine .popbg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  filter:blur(13px) brightness(.55) saturate(1.2);transform:scale(1.35);display:block}
+.spine .pop{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;display:block}
 .spine .txt{transition:opacity .18s ease}
 .spine.here.hasart .txt{opacity:0}
 .rec.picked{animation:none}

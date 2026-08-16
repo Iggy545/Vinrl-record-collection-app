@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.46';
+const APP_VERSION = '0.12.47';
 
 const mem = {};
 const store = {
@@ -2022,7 +2022,9 @@ function selItems(){
 let hereUid = null;
 function paintHere(){
   document.querySelectorAll('.here').forEach(n => n.classList.remove('here','hasart'));
-  document.querySelectorAll('#crate .pop').forEach(n => n.remove());
+  /* Both layers, or the blurred fills pile up one per render — paintHere
+     runs after every save and every incoming sync update. */
+  document.querySelectorAll('#crate .pop, #crate .popbg').forEach(n => n.remove());
   if(!hereUid) return;
   const it = DB.items.find(x => x.uid === hereUid);
   if(!it) return;
@@ -2036,9 +2038,15 @@ function paintHere(){
   if(!sp) return;
   sp.classList.add('here');
   if(it.art){
-    const img = document.createElement('img');
-    img.className = 'pop'; img.alt = ''; img.src = it.art;
-    sp.appendChild(img);
+    /* Two layers: the blurred blow-up fills the spine, the cover sits on
+       it whole. Same src both times, so it is one network fetch and the
+       second is served from cache. Order matters — the fill is inserted
+       first so the cover paints over it without either needing z-index. */
+    ['popbg', 'pop'].forEach(cls => {
+      const img = document.createElement('img');
+      img.className = cls; img.alt = ''; img.src = it.art;
+      sp.appendChild(img);
+    });
     sp.classList.add('hasart');
   }
 }
