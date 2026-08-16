@@ -506,10 +506,37 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
    rule becomes dead weight rather than wrong. */
 body.locating #v-crate{animation:none}
 body.locating .crate-rail{position:relative;z-index:61}
-/* .tilelit, not .locating: the lit tile is raised over the sticky top
-   bar as well as out of the scrim, so it is only worth doing when
-   spotlightRail has worked out that it will clear it. */
-body.locating.tilelit .shelfTile.here{position:relative;z-index:61}
+/* The shelf tile is deliberately NOT lifted out of the scrim any more.
+   v0.12.46–48 raised it, which also raised it over the sticky top bar and
+   produced two collisions with the CRATE wordmark — one on open, one on
+   scroll. The pinned strip below answers "which crate" at every screen
+   size instead, so the tile has nothing left to prove and the whole
+   `tilelit` mechanism, and the scroll listener that patched it, are gone. */
+
+/* The pinned crate strip (v0.12.49). The full 116px tile and the 184px
+   record cannot both fit the band a sheet leaves clear — 157px on a 760px
+   screen with the record sheet open — so the crate is restated here in
+   44px instead of fought into the layout. Fixed, so it owes nothing to
+   where the page happens to be scrolled: that is the whole point, "shown
+   without even scrolling at all".
+   Sits at z-index 61 with the rest of the spotlight, under the sheet (62)
+   and over the scrim (60), and below the sticky top bar it tucks beneath. */
+#crateLit{display:none}
+body.locating #crateLit{display:flex;align-items:center;gap:10px;
+  position:fixed;left:16px;right:16px;top:calc(56px + 6px);z-index:61;
+  height:44px;padding:0 12px;border-radius:10px;
+  background:var(--wax);border:1px solid var(--groove);
+  outline:2px solid var(--card);outline-offset:-1px;
+  box-shadow:0 0 20px rgba(236,230,218,.20), var(--shadow)}
+/* Same spine treatment as the crate tile, at strip scale, so the two
+   read as the same object. Built from the same hue() in paintHere. */
+#crateLit .mini{display:flex;gap:1.5px;flex:none;width:74px;height:24px;
+  padding:2px 3px;border-radius:5px;background:var(--ink);overflow:hidden;
+  box-shadow:inset 0 1px 6px rgba(0,0,0,.6)}
+#crateLit .mini i{flex:1;min-width:1px;border-radius:1px;display:block}
+#crateLit .name{min-width:0;flex:1;color:var(--card);font-weight:700;font-size:14px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#crateLit .pos{flex:none;font-family:var(--mono);font-size:11px;color:var(--dust)}
 /* The rail's own background stops at the crate box, so lifting it above
    the scrim leaves the gap over the spines showing the dimmed page
    behind. Giving the lifted rail the page colour keeps the popped

@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.48';
+const APP_VERSION = '0.12.49';
 
 const mem = {};
 const store = {
@@ -2020,6 +2020,31 @@ function selItems(){
    are: the tiles are rebuilt from scratch each time, so a class set
    once would not survive the next save. */
 let hereUid = null;
+/* The crate restated in 44px, pinned under the top bar while a record is
+   open. The full tile and the record cannot share the band a sheet leaves
+   clear, and the answer to "which crate" was the half that kept losing —
+   so it stops competing for the space and gets its own.
+
+   Filled from paintHere rather than rendered once, for the same reason the
+   tile classes are: a rename, a move or an incoming sync update all have to
+   show here, and the strip is derived from DB every time. Position is
+   counted off the sorted shelf like locatorHtml does, never read from
+   item.slot, so a stale number cannot outlive the order it describes. */
+function paintCrateLit(it){
+  const el = $('#crateLit');
+  if(!el) return;
+  const on = DB.items.filter(x => x.shelf === it.shelf).sort(bySlot);
+  const pos = Math.max(1, on.findIndex(x => x.uid === it.uid) + 1);
+  /* Same hue() and same gradient as renderShelfGrid's tile, so the strip
+     and the tile are recognisably the same crate rather than two designs. */
+  el.querySelector('.mini').innerHTML = on.slice(0, 18).map(r => {
+    const h = hue(r.artist + r.label);
+    return `<i style="background:linear-gradient(180deg,hsl(${h} 36% 32%),hsl(${h} 30% 16%))"></i>`;
+  }).join('');
+  el.querySelector('.name').textContent = it.shelf || 'no shelf';
+  el.querySelector('.pos').textContent = pos + ' of ' + on.length;
+}
+
 function paintHere(){
   document.querySelectorAll('.here').forEach(n => n.classList.remove('here','hasart'));
   /* Both layers, or the blurred fills pile up one per render — paintHere
@@ -2031,6 +2056,7 @@ function paintHere(){
   document.querySelectorAll('.shelfTile[data-shelf-name]').forEach(n => {
     if(n.dataset.shelfName === it.shelf) n.classList.add('here');
   });
+  paintCrateLit(it);
   /* The sleeve is hung on the one spine that needs it rather than
      rendered into all 150 the rail can hold — one image, not a crate
      full of them. Removed again above whenever the record changes. */
@@ -2848,69 +2874,33 @@ function locatorHtml(it){
    short and the record sheet is 72vh, so a hard-coded offset would be
    wrong for one of them. The sheet's height is readable the moment its
    markup is in, translateY not affecting layout height. */
-/* Both declared above the function that reads them, not below it — a
-   const used above its declaration sits in the temporal dead zone, and
-   that has bitten this file before. */
+/* Declared above the function that reads them, not below — a const used
+   above its declaration sits in the temporal dead zone, and that has
+   bitten this file before. */
 const SPOT_GAP = 14;                 /* breathing room over the sheet */
-/* What the record settles for when fitting the shelf tile in as well:
-   fully on screen rather than comfortably so. Held apart from SPOT_GAP
-   because using the roomier figure for both lost the tile by THREE
-   pixels on a 760px screen — the exact size Iggy's phone reports. */
-const SPOT_MIN = 4;
 const TOPBAR_H = 56;                 /* the sticky bar the rail must clear */
+
 function spotlightRail(){
   const rail = document.querySelector('.crate-rail'), sheet = $('#sheet');
   if(!rail || !sheet) return;
   const r = rail.getBoundingClientRect();
   if(!r.height) return;              /* Crate view isn't the one on screen */
   const clear = window.innerHeight - sheet.getBoundingClientRect().height;
-  /* Sit the rail on the sheet, but never push it under the sticky top
-     bar to do it — a tall rail on a short screen keeps its top instead. */
-  let by = r.top - Math.max(TOPBAR_H, clear - SPOT_GAP - r.height);
+  /* The floor is the top bar, NOT the bottom of the pinned crate strip,
+     and that is deliberate. Reserving room below the strip cost the record
+     a further ~50px and left 51px of it on a 664px screen — a sliver.
+     Letting the strip float over the rail's top instead costs almost
+     nothing real: the rail carries 60px of headroom above its spines, and
+     the sleeve is object-fit:contain, so the cover occupies only the
+     middle 86px of the 184px spine and the top is blurred fill. The strip
+     lands on the fill.
 
-  /* Then try to fit the lit shelf tile in as well. Lifting the tile out
-     of the scrim also lifts it over the sticky top bar, so a tile that
-     lands under the bar gets painted across the CRATE wordmark — which
-     is what the first cut of this did. Rather than give the tile up on
-     a phone-sized screen, scroll a little less so it clears the bar.
-
-     What makes that affordable is that the rail is 26px of padding
-     taller than its spines, and that padding is background: it can slide
-     under the sheet with nothing lost. So the test is the popped SPINE's
-     bottom edge, not the rail's — the record is the thing being pointed
-     at and it never gives up its place to the tile. */
-  const tile = document.querySelector('.shelfTile.here');
-  const sp = document.querySelector('#crate .spine.here');
-  if(tile && sp){
-    const byTile = tile.getBoundingClientRect().top - TOPBAR_H;
-    if(byTile < by && sp.getBoundingClientRect().bottom - byTile <= clear - SPOT_MIN) by = byTile;
-  }
-  /* Predicted from the scroll about to be made rather than measured
-     after it: the scroll is smooth and asynchronous, so there is no
-     honest moment to measure at. Carried on <body> so paintHere()
-     rebuilding the tiles cannot drop it mid-locate. */
-  document.body.classList.toggle('tilelit',
-    !!tile && tile.getBoundingClientRect().top - by >= TOPBAR_H);
-
+     It only ever comes to that under pressure. Where the band is roomy —
+     the locator, whose card is 266px — `clear - SPOT_GAP - r.height` wins
+     and the rail sits well below the strip with no overlap at all. */
+  const by = r.top - Math.max(TOPBAR_H, clear - SPOT_GAP - r.height);
   window.scrollBy({top: by, behavior:'smooth'});
 }
-
-/* The page can still be scrolled behind the sheet, and spotlightRail only
-   decided `tilelit` once — so scrolling dragged a lifted tile up under the
-   sticky bar, still at z-index 61, and it painted straight over the CRATE
-   wordmark. Exactly the collision the flag exists to prevent, reached a
-   different way. Re-checked here from the tile's ACTUAL position, unlike
-   spotlightRail which has to predict one that has not happened yet.
-
-   Attached once and no-opping unless the spotlight is on, rather than
-   added and removed around each sheet: one passive listener is cheap, and
-   it cannot be left behind by some future path that forgets to detach. */
-window.addEventListener('scroll', () => {
-  if(!document.body.classList.contains('locating')) return;
-  const tile = document.querySelector('.shelfTile.here');
-  document.body.classList.toggle('tilelit',
-    !!tile && tile.getBoundingClientRect().top >= TOPBAR_H);
-}, {passive:true});
 
 function openLocator(uid){
   const it = DB.items.find(x => x.uid === uid); if(!it) return;
@@ -3449,7 +3439,7 @@ function closeSheet(){
      disagreeing with crateList(), which is what "select all" reads. */
   renderCrate(); paintHere();
   $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on','compact');
-  document.body.classList.remove('locating','tilelit');
+  document.body.classList.remove('locating');
 }
 
 /* ══════════════════════════════════════════════════════════
