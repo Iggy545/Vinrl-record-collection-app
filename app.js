@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.47';
+const APP_VERSION = '0.12.48';
 
 const mem = {};
 const store = {
@@ -2895,6 +2895,23 @@ function spotlightRail(){
   window.scrollBy({top: by, behavior:'smooth'});
 }
 
+/* The page can still be scrolled behind the sheet, and spotlightRail only
+   decided `tilelit` once — so scrolling dragged a lifted tile up under the
+   sticky bar, still at z-index 61, and it painted straight over the CRATE
+   wordmark. Exactly the collision the flag exists to prevent, reached a
+   different way. Re-checked here from the tile's ACTUAL position, unlike
+   spotlightRail which has to predict one that has not happened yet.
+
+   Attached once and no-opping unless the spotlight is on, rather than
+   added and removed around each sheet: one passive listener is cheap, and
+   it cannot be left behind by some future path that forgets to detach. */
+window.addEventListener('scroll', () => {
+  if(!document.body.classList.contains('locating')) return;
+  const tile = document.querySelector('.shelfTile.here');
+  document.body.classList.toggle('tilelit',
+    !!tile && tile.getBoundingClientRect().top >= TOPBAR_H);
+}, {passive:true});
+
 function openLocator(uid){
   const it = DB.items.find(x => x.uid === uid); if(!it) return;
   /* No eyebrow and no hint paragraph: standing at the crate you want the
@@ -2931,15 +2948,21 @@ function openSheet(uid){
   /* Only a DIFFERENT record starts locked again. The sheet is rebuilt in
      place after adding a track or changing a grade, and re-locking there
      would drop you out of editing mid-job. */
-  if(openUid !== uid) trackEdit = false;
+  /* Captured before openUid is reassigned. It gates two things that must
+     NOT happen on a rebuild: re-locking the track fields, and moving the
+     page. This sheet is rebuilt in place after every grade change, added
+     track and filled-in tempo, and scrolling the crate under your thumb
+     each time would be unusable. */
+  const changed = openUid !== uid;
+  if(changed) trackEdit = false;
   openUid = uid;
-  /* Both are the locator's, and this sheet is reached straight from it
-     via "Open the record" — leaving them on would keep the rail lifted
-     out of the scrim underneath a full-height sheet, and keep the
-     compact spacing on a sheet that is anything but. */
+  /* The compact card is the locator's and goes; the spotlight stays. This
+     sheet's "Where it is" points at the very same crate, and it was the
+     one place where the shelf tile lit up while the rail sat under the
+     scrim — which is exactly what Iggy reported on 2026-08-16. */
   $('#sheet').classList.remove('compact');
-  document.body.classList.remove('locating','tilelit');
-  showHere(uid);            /* light up the crate this one lives in */
+  document.body.classList.add('locating');
+  showHere(uid, true);      /* light the crate; spotlightRail does the scrolling */
   const v = itemValue(it);
   $('#sheetBody').innerHTML = `
     <div class="sheet-head">
@@ -3302,6 +3325,15 @@ function openSheet(uid){
     spin(false);
   };
   $('#scrim').classList.add('on'); $('#sheet').classList.add('on');
+  /* Only for a genuinely different record. Every grade change, added
+     track and filled-in tempo rebuilds this sheet by calling openSheet
+     again, and scrolling the crate each time would move the page under
+     the thumb that is still typing. Runs after .on so the sheet's height
+     is settled — spotlightRail measures it to decide where the rail goes,
+     and at 72vh the rail cannot fit above it whole: the top of the record
+     shows and its lower part sits behind the sheet, which is the trade
+     Iggy chose over shrinking the sheet. */
+  if(changed) requestAnimationFrame(spotlightRail);
 }
 /* Nothing is written until you tick it. Each row shows what the source
    actually matched, because the failure mode isn't "no answer" — it's a
