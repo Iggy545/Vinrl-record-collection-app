@@ -357,6 +357,13 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .pickbtn.on::after{color:var(--sticker)}
 .filterbar .pickbtn{padding:9px 8px;font-size:13px;min-height:41px}
 .filterbar .lane .pickbtn{flex:1 1 0;width:auto}
+/* A .row lane is `flex:1` with min-width:auto, so its automatic minimum
+   size is the BUTTON'S min-content width — one long crate or genre name
+   and the control beside it is squeezed to nothing instead of the label
+   ellipsising. The short "Every shelf"/"Every genre" defaults hid this
+   until shelf names, which are typed by hand, went through a picker too.
+   Same shape as the .filterbar .lane rules above. */
+.pickfit{min-width:0}
 /* tick rows in the genre picker sheet */
 .pick.tick .box{flex:0 0 20px;height:20px;border-radius:4px;border:1px solid var(--groove);
   display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--sticker-ink)}

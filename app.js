@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.49';
+const APP_VERSION = '0.12.50';
 
 const mem = {};
 const store = {
@@ -1030,8 +1030,12 @@ function genreList(){
    "Trance" off a Discogs release and "trance" off a track. */
 let genreSel = [];        /* crate filter */
 let setGenreSel = [];     /* Sets tab scope */
+/* Held as exact names, NOT folded — see openTickPick. Rewritten by the
+   shelf-rename handler and pruned by renderSetControls, because a scope
+   naming a shelf that has gone builds from everything without saying so. */
+let setShelfSel = [];     /* Sets tab scope */
 
-const genreLabel = (list, none) =>
+const pickLabel = (list, none) =>
   !list.length ? none : list.length === 1 ? list[0] : list[0] + ' +' + (list.length - 1);
 
 /* The label lives in a span so it can ellipsise — a bare text node in a
@@ -1058,55 +1062,79 @@ function genreTally(){
   return tally;
 }
 
-function openGenrePick(chosen, opts, onDone){
-  const gl = genreList();
-  const on = new Set(chosen.map(g => String(g).toLowerCase()));
-  const tally = genreTally();
-  const rows = gl.map((g, i) => {
-    const n = tally[g.toLowerCase()] || 0;
-    return `<button class="pick tick" data-g="${i}">
+/* One tick sheet for every scope picker. The `key` function is the whole
+   difference between them: a genre arrives as "Trance" off a release and
+   "trance" off a track, so genres fold case-insensitively — but shelf
+   names must NOT, because `add shelf` lets Main and main coexist and
+   folding them would tick both off one tap. */
+function openTickPick(list, key, chosen, opts, onDone){
+  const on = new Set(chosen.map(key));
+  const rows = list.map((x, i) => {
+    const n = opts.count(x);
+    return `<button class="pick tick" data-x="${i}">
       <span class="box"></span>
-      <span class="who"><b>${esc(g)}</b>
+      <span class="who"><b>${esc(x)}</b>
         <span>${n} record${n === 1 ? '' : 's'}</span></span>
     </button>`;
   }).join('');
 
   $('#sheetBody').innerHTML = `
     <h3 style="margin:0 0 4px">${esc(opts.title)}</h3>
-    <p class="hint" style="margin:0 0 12px">Tick as many as you like — anything filed
-      under <b>any</b> of them comes back.<br><b id="gpCount"></b></p>
-    ${gl.length ? `<div class="picklist">${rows}</div>`
-                : '<p class="hint">No genres anywhere yet. Type one on a track, or tag a run of them from the crate.</p>'}
+    <p class="hint" style="margin:0 0 12px">Tick as many as you like — ${opts.blurb}<br><b id="tpCount"></b></p>
+    ${list.length ? `<div class="picklist">${rows}</div>`
+                  : `<p class="hint">${esc(opts.empty)}</p>`}
     <div class="row" style="margin-top:12px">
-      <button class="btn quiet" id="gpAll">${esc(opts.none)}</button>
-      <button class="btn" id="gpDone">Done</button>
+      <button class="btn quiet" id="tpAll">${esc(opts.none)}</button>
+      <button class="btn" id="tpDone">Done</button>
     </div>`;
 
   const paint = () => {
     $('#sheetBody').querySelectorAll('.pick.tick').forEach(b => {
-      const k = gl[+b.dataset.g].toLowerCase();
-      const yes = on.has(k);
+      const yes = on.has(key(list[+b.dataset.x]));
       b.classList.toggle('on', yes);
-      b.querySelector('.box').textContent = yes ? '✓' : '';
+      b.querySelector('.box').textContent = yes ? '\u2713' : '';
     });
-    $('#gpCount').textContent = on.size
+    $('#tpCount').textContent = on.size
       ? on.size + ' picked' : 'Nothing ticked means ' + opts.none.toLowerCase() + '.';
   };
   $('#sheetBody').querySelectorAll('.pick.tick').forEach(b => b.onclick = () => {
-    const k = gl[+b.dataset.g].toLowerCase();
+    const k = key(list[+b.dataset.x]);
     if(on.has(k)) on.delete(k); else on.add(k);
     paint();
   });
-  $('#gpAll').onclick = () => { on.clear(); paint(); };
-  $('#gpDone').onclick = () => {
+  $('#tpAll').onclick = () => { on.clear(); paint(); };
+  $('#tpDone').onclick = () => {
     closeSheet();
     /* Hand back the collection's own spelling, in its own order, not the
-       lower-cased keys or the order they were tapped in. */
-    onDone(gl.filter(g => on.has(g.toLowerCase())));
+       folded keys or the order they were tapped in. */
+    onDone(list.filter(x => on.has(key(x))));
   };
   paint();
   $('#scrim').classList.add('on');
   $('#sheet').classList.add('on');
+}
+
+function openGenrePick(chosen, opts, onDone){
+  const tally = genreTally();
+  openTickPick(genreList(), g => String(g).toLowerCase(), chosen, {
+    title: opts.title, none: opts.none,
+    blurb: 'anything filed under <b>any</b> of them comes back.',
+    empty: 'No genres anywhere yet. Type one on a track, or tag a run of them from the crate.',
+    count: g => tally[g.toLowerCase()] || 0
+  }, onDone);
+}
+
+/* Counted off item.shelf rather than DB.shelves so a crate you have
+   emptied still lists, saying 0, instead of quietly going missing. */
+function openShelfPick(chosen, opts, onDone){
+  const tally = {};
+  DB.items.forEach(it => { if(it.shelf) tally[it.shelf] = (tally[it.shelf] || 0) + 1; });
+  openTickPick(DB.shelves.slice(), s => s, chosen, {
+    title: opts.title, none: opts.none,
+    blurb: 'anything on <b>any</b> of them comes back.',
+    empty: 'No shelves yet. Add one from the crate.',
+    count: s => tally[s] || 0
+  }, onDone);
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2469,7 +2497,7 @@ function renderFilters(){
   if($('#genreFilter')){
     const live = new Set(genreList().map(g => g.toLowerCase()));
     genreSel = genreSel.filter(g => live.has(g.toLowerCase()));
-    setPickLabel('#genreFilter', genreLabel(genreSel, 'All genres'), genreSel.length);
+    setPickLabel('#genreFilter', pickLabel(genreSel, 'All genres'), genreSel.length);
   }
   const kf = $('#keyFilter'), keepK = kf.value, tally = {};
   allTracks().forEach(({t}) => { if(t.key) tally[t.key] = (tally[t.key]||0)+1; });
@@ -3731,14 +3759,16 @@ const SET_FALLBACK_SECS = 330; /* 5:30 — a 12" side, when Discogs gave no dura
    A track needs a BPM to be here at all: without one it cannot be
    beatmatched, so putting it in a set would be proposing a mix that
    can't be done. Energy alone is not enough. */
-function setPool(shelf, genres){
-  /* A list, matched as an OR, the same as the crate filter — building
-     from trance AND prog house together is the normal case, not an edge
-     one. An empty list means every genre. */
+function setPool(shelves, genres){
+  /* Both are lists, matched as an OR, the same as the crate filter —
+     building from trance AND prog house, or off the two crates you are
+     actually taking out, is the normal case rather than an edge one.
+     An empty list means every genre / every shelf. */
   const gsel = (genres || []).map(g => String(g).toLowerCase());
+  const shsel = shelves || [];
   const usable = [], noBpm = [], noEnergy = [];
   DB.items.forEach(it => {
-    if(shelf && it.shelf !== shelf) return;
+    if(shsel.length && !shsel.includes(it.shelf)) return;
     (it.tracks || []).forEach((t, i) => {
       if(gsel.length && !gsel.includes(String(trackGenre(t, it) || '').toLowerCase())) return;
       const e = energyOf(t, it);
@@ -4013,10 +4043,10 @@ function saveCurrentSet(){
     curve: setLast.curve,
     mins: Math.round(setLast.target / 60),
     created: when.toISOString(),
-    /* `genres` is a list now. Nothing reads scope back — it is kept as a
+    /* Both are lists now. Nothing reads scope back — it is kept as a
        record of how the set was built — so the shape change is inert on
        a device still running an older build. */
-    scope: {shelf: $('#setShelf').value || '', genres: setGenreSel.slice()},
+    scope: {shelves: setShelfSel.slice(), genres: setGenreSel.slice()},
     tracks: setLast.seq.map(c => ({uid: c.it.uid, i: c.i, title: c.t.title || '', pos: c.t.pos || ''}))
   };
   DB.sets = DB.sets || [];
@@ -4093,17 +4123,16 @@ function renderCurvePick(){
 }
 
 function renderSetControls(){
-  const sh = $('#setShelf'); if(!sh) return;
-  const keepS = sh.value;
-  sh.innerHTML = '<option value="">Every shelf</option>' +
-    DB.shelves.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
-  sh.value = DB.shelves.includes(keepS) ? keepS : '';
-  /* Pruned against the live list for the same reason the crate filter is:
-     a scope naming a genre nothing carries builds an empty set and says
-     nothing about why. */
+  if(!$('#setShelf')) return;
+  /* Both scopes are pruned against the live lists for the same reason the
+     crate filter is: a scope naming a shelf or a genre nothing carries
+     builds an empty set and says nothing about why. Exact match on the
+     shelf, no folding — Main and main are two different crates. */
+  setShelfSel = setShelfSel.filter(s => DB.shelves.includes(s));
+  setPickLabel('#setShelf', pickLabel(setShelfSel, 'Every shelf'), setShelfSel.length);
   const live = new Set(genreList().map(g => g.toLowerCase()));
   setGenreSel = setGenreSel.filter(g => live.has(g.toLowerCase()));
-  setPickLabel('#setGenre', genreLabel(setGenreSel, 'Every genre'), setGenreSel.length);
+  setPickLabel('#setGenre', pickLabel(setGenreSel, 'Every genre'), setGenreSel.length);
 }
 
 /* Said up front, before you build anything: a collection that isn't ready
@@ -4111,7 +4140,7 @@ function renderSetControls(){
    letting you find out at the gig. */
 function renderSetCoverage(){
   const el = $('#setCover'); if(!el) return;
-  const {usable, noBpm, noEnergy} = setPool($('#setShelf').value, setGenreSel);
+  const {usable, noBpm, noEnergy} = setPool(setShelfSel, setGenreSel);
   const total = usable.length + noBpm.length + noEnergy.length;
   if(!total){
     el.innerHTML = `<div class="hint">Nothing here yet. Add some records, or widen the shelf and genre above.</div>`;
@@ -4257,10 +4286,9 @@ function renderSetResult(){
 }
 
 function doBuildSet(){
-  const shelf = $('#setShelf').value;
   const mins = clamp(parseInt($('#setMins').value, 10) || 90, 5, 600);
   const startBpm = parseFloat($('#setStart').value) || 0;
-  const {usable} = setPool(shelf, setGenreSel);
+  const {usable} = setPool(setShelfSel, setGenreSel);
   const target = mins * 60;
   spin(true);
   const built = buildSet(usable, CURVES[setCurve].pts, target, startBpm, setSeed);
@@ -4476,6 +4504,10 @@ document.addEventListener('click', e => {
     /* the filing target is held by name too, so it has to follow or new
        records would quietly start landing on the first shelf instead */
     if(DB.fileTo && DB.fileTo.shelf === from) DB.fileTo.shelf = to;
+    /* the Sets scope holds names too, and renderSetControls prunes what
+       it cannot find — without this a rename would silently widen the
+       pool from one crate to the whole collection */
+    setShelfSel = setShelfSel.map(s => s === from ? to : s);
     save(); renderAll();
     /* the filter dropdown was rebuilt around the new name, so a filter
        pointing at the old one would silently fall back to All shelves */
@@ -4620,9 +4652,11 @@ function setScopeChanged(){
   renderSetCoverage();
   if(setLast){ setLast = null; renderSetResult(); }
 }
-$('#setShelf').onchange = setScopeChanged;
-/* The genre scope is a button now, not a select, so it has no change
-   event — the picker calls the same thing when it closes. */
+/* Both scopes are buttons now, not selects, so neither fires a change
+   event — each picker calls the same thing when it closes. */
+$('#setShelf').onclick = () => openShelfPick(setShelfSel,
+  {title: 'Build from which shelves?', none: 'Every shelf'},
+  picked => { setShelfSel = picked; renderSetControls(); setScopeChanged(); });
 $('#setGenre').onclick = () => openGenrePick(setGenreSel,
   {title: 'Build from which genres?', none: 'Every genre'},
   picked => { setGenreSel = picked; renderSetControls(); setScopeChanged(); });
@@ -5060,7 +5094,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint"><b>Energy, 1 to 10.</b> Every track shows how hard it hits. Until you say otherwise the number is worked out from the track's own tempo, key and length — and crucially from where that tempo sits <i>among your other records of the same genre</i>, so "fast for a dub record" and "fast for a hard house record" aren't the same number. Nothing is stored while it's being worked out, so it re-reads itself as you fill more tempos in. Drag the slider on any track to overrule it; tap <i>reset</i> to hand it back. A track with no BPM shows — rather than a guess.</p>
     <p class="hint"><b>Or have a look online first.</b> <i>Find tempo, key &amp; energy</i> on a record asks GetSongBPM and AcousticBrainz. Expect gaps — these index streaming catalogues, and white labels, promos and vinyl-only remixes are exactly what they haven't got. It shows you what it matched and how sure it is, and writes nothing until you tick it, because the dangerous answer isn't "not found" — it's a confident number for the wrong mix. Energy comes from AcousticBrainz only, and out of the same response as the tempo, so asking for it costs no extra look-up. Tempo, key and energy data by <a href="https://getsongbpm.com" target="_blank" rel="noopener">GetSongBPM</a> and <a href="https://acousticbrainz.org" target="_blank" rel="noopener">AcousticBrainz</a>.</p>
     <p class="hint"><b>Sorting for a set.</b> Switch to Tracks, pick "Key, then BPM", and your whole collection comes back grouped by key with tempo climbing inside each group. Set a BPM range and a key, tick "harmonically compatible", and you've got every record that'll mix. <b>Genre takes as many as you like</b> — tap it, tick Trance and Progressive House, and anything filed under either comes back; the button then reads "Trance +1" so you can see it's on. The same picker sets what the Sets tab builds from. <i>Energy low–high</i> and <i>Energy, then BPM</i> order the same list by how hard things hit, and the ↓ button reverses either — so peak-time first is one tap away.</p>
-    <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
+    <p class="hint"><b>Or let Crate build the set.</b> The <i>Sets</i> tab walks your collection along a shape you pick — slow build, double peak, warm-up, closing set, peak time or after hours — and orders records so the energy follows it. Draw from as many crates as you like — tap <i>From</i> and tick the ones you're taking out — and as many genres, the same way. It keeps the tempo mixable on the way: a Technics gives you ±8%, so it treats a join inside 6% as a blend and says <i>hard cut</i> when it isn't, and it stays in key using the same Camelot rules as the filter. Tracks with no BPM are left out and counted, because you can't beatmatch what hasn't been timed. Nothing on your records changes — <i>another go</i> reshuffles, and the whole thing exports to CSV.</p>
     <p class="hint"><b>Keeping a set.</b> <i>Save this set</i> names it and puts it under <i>Your sets</i> at the top of the tab, where you can reopen, rename or delete it. Saved sets go into your backup and sync to your other device like everything else. They keep a <i>reference</i> to each track rather than a copy, so correcting a BPM updates every set that uses it — and if you later delete a record or rename a track, the set says how many have gone rather than quietly getting shorter. Deleting a set never touches the records.</p>
     <p class="hint"><b>It knows these are records.</b> <b>A record never follows itself</b> — not the other side, not the next track along. You mix from one deck to the other, and the same piece of vinyl can't be on both, so every join in a set is between two different records. It also avoids sending you back to a sleeve you've already put away. Underneath the set is a <b>pull list</b> — every sleeve you need, in the order you'll want it, with the shelf code and position so you can pull the lot in one go.</p>
     <p class="hint"><b>Taking a set to the crate.</b> Open a saved set and tap <i>Show these in the crate</i>. The Crate tab comes up filtered to just that set's tracks, so a tap on any of them opens the locator — shelf, position, the ruler and the two records either side. Switch to <i>Sleeves</i> and the same filter gives you the pull list as a wall of covers. An orange bar across the top says which set you're looking at; <i>show all</i> on it, or <i>Clear filters</i>, puts the whole crate back.</p>

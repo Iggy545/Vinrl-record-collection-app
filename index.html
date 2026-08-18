@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=0.12.49">
+<link rel="stylesheet" href="styles.css?v=0.12.50">
 </head>
 <body>
 
@@ -201,11 +201,11 @@
   <div class="row">
     <div><label class="f" for="setMins">How long</label>
       <input type="number" id="setMins" value="90" min="10" max="600" step="5" inputmode="numeric"></div>
-    <div><label class="f" for="setShelf">From</label>
-      <select id="setShelf"></select></div>
+    <div class="pickfit"><label class="f" for="setShelf">From</label>
+      <button type="button" class="pickbtn" id="setShelf"><span>Every shelf</span></button></div>
   </div>
   <div class="row">
-    <div><label class="f" for="setGenre">Genre</label>
+    <div class="pickfit"><label class="f" for="setGenre">Genre</label>
       <button type="button" class="pickbtn" id="setGenre"><span>Every genre</span></button></div>
     <div><label class="f" for="setStart">Start near</label>
       <input type="number" id="setStart" placeholder="any BPM" min="40" max="300" inputmode="numeric"></div>
@@ -341,6 +341,6 @@
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheetBody"></div></div>
 <div id="toast" role="status"></div>
 
-<script src="app.js?v=0.12.49"></script>
+<script src="app.js?v=0.12.50"></script>
 </body>
 </html>
