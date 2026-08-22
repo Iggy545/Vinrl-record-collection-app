@@ -291,6 +291,15 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .shelfTile.empty .art{opacity:.4}
 .grid.editing .rec{cursor:grab;animation:jiggle .8s ease-in-out infinite}
 .grid.editing .rec .sleeve{outline:1px dashed var(--dust);outline-offset:2px}
+/* Ticking only ever happens while the grid is editing, and both rules above
+   out-specify the .rec.sel pair further up (four class selectors against
+   three, and later in the file besides) — so a ticked sleeve wore the same
+   grey dash as an un-ticked one and went on jiggling, leaving the ✓ in the
+   corner as the only difference. Restated at this weight so the tick wins.
+   Same for the rail, where .crate.editing .spine was beating .spine.sel. */
+.grid.editing .rec.sel{animation:none}
+.grid.editing .rec.sel .sleeve{outline:2px solid var(--ok);outline-offset:3px}
+.crate.editing .spine.sel{animation:none}
 .rec.drag{animation:none;opacity:.92;position:relative;z-index:5;cursor:grabbing}
 .rec.drag .sleeve{outline:2px solid var(--sticker);outline-offset:2px}
 .shelfGrid.editing .shelfTile{cursor:grab;animation:jiggle .8s ease-in-out infinite}

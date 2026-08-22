@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.50';
+const APP_VERSION = '0.12.51';
 
 const mem = {};
 const store = {
@@ -2037,11 +2037,27 @@ let selMode = false;
 const ticked = new Set();
 let selPlacing = false;         /* armed: the next tap says where the set goes */
 
-/* Always act in shelf order, never the order things were ticked in, so a
-   block of records keeps the arrangement it already had wherever it lands. */
+/* Never the order things were ticked in — that is just the order your
+   thumb happened to travel, and it would land a block in a shuffle.
+
+   The set lands in the order you can SEE it. Working through the
+   collection A–Z and re-filing a run of sleeves, the whole point is that
+   they arrive A–Z; under "Shelf order — yours" the grid is shelf order
+   anyway, so this is the same answer it always gave. Only the sleeve grid
+   gets a say: the rail is always shelf order, so when the grid isn't the
+   surface arranging there is nothing to defer to.
+
+   Anything ticked that the filter has since hidden keeps its shelf order
+   and goes on the end rather than dropping out — moving fewer records than
+   the count on the bar promised is how a block quietly gets left behind. */
 function selItems(){
-  return DB.items.filter(i => ticked.has(i.uid))
-    .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b));
+  const byShelf = (a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b);
+  const got = DB.items.filter(i => ticked.has(i.uid));
+  if(!recEdit || !got.length) return got.sort(byShelf);
+  const onScreen = new Map();
+  visible().forEach((i, n) => onScreen.set(i.uid, n));
+  const at = i => onScreen.has(i.uid) ? onScreen.get(i.uid) : 1e9;
+  return got.sort((a,b) => at(a) - at(b) || byShelf(a,b));
 }
 /* ── which crate the open record is in ──────────────────────
    Repainted after every render for the same reason picked and ticked
@@ -2547,20 +2563,29 @@ function renderStats(){
 let MODE = 'sleeves';
 let recEdit = false;
 
-/* Rearranging only makes sense on one shelf at a time in the sleeve
-   view sorted by shelf order — anywhere else a dragged record would
-   just spring back to wherever the current sort puts it. */
+/* Dragging a sleeve into a new position is the ONE arranging action that
+   reads the screen instead of the slots — renumberFromDom writes the DOM
+   order straight into slot numbers — so it is the one that needs the grid
+   to actually BE the shelf order. Reversed counts as a different sort for
+   the same reason: a back-to-front grid would quietly turn the shelf round.
+   Everything else on the bar reads slots and never writes the screen back. */
+const canDragOrder = () => MODE === 'sleeves' && $('#sort').value === 'shelf' && !isDesc();
+
+/* Arranging lives in the sleeve view. It used to live in the sleeve view
+   sorted by shelf order un-reversed, because the gate above was the only
+   gate there was — which made re-filing a run of sleeves while working
+   through the collection A–Z the one thing you couldn't do, since sorting
+   A–Z took the whole bar away. Ticking a set and dropping it on a crate
+   never needed shelf order; only dragging did. */
 function updateArrangeBar(){
   const bar = $('#arrangeBar');
   if(!bar) return;
-  /* Reversed counts as a different sort here. renumberFromDom writes new
-     slots straight from the on-screen order, so arranging a back-to-front
-     grid would quietly turn the whole shelf round. */
-  const usable = MODE === 'sleeves' && $('#sort').value === 'shelf' && !isDesc();
+  const usable = MODE === 'sleeves';
   bar.style.display = usable ? '' : 'none';
   const shelf = $('#shelfFilter').value;
-  /* Sorting by anything else drops you out of arranging. Selecting goes
-     with it, unless the rail is still arranging and can carry the set. */
+  /* The track list has no sleeves to tick, so it still drops you out.
+     Selecting goes with it, unless the rail is still arranging and can
+     carry the set. */
   if(!usable){
     recEdit = false;
     if(!crateEdit && selMode){ selMode = false; ticked.clear(); selPlacing = false; }
@@ -2573,7 +2598,8 @@ function updateArrangeBar(){
     ? (shelf ? 'Shelf ' + shelf : 'Your order')
     : selMode ? selNote()
     : picked ? 'Now tap where it goes, or a shelf to move it'
-             : 'Tap a record to pick it up';
+    : canDragOrder() ? 'Tap a record to pick it up'
+             : 'Tap a record to pick it up · shelf order to drag';
   $('#grid').classList.toggle('editing', recEdit);
   paintSel();          /* which surface shows ticks follows the arrange flags */
 }
@@ -4876,6 +4902,16 @@ $('#btnTagUndo').onclick = undoTagGenre;
 
     if(!moved) return;
     justDragged = Date.now();          /* the click that follows isn't a tap */
+    /* Dragged into a new position while the grid is showing some other
+       order: what is on screen is not what is on the shelf, so writing it
+       back would re-file the shelf into whatever you were browsing by.
+       Put the grid back and say why, rather than scrambling it silently.
+       Dropping onto a crate tile is unaffected — that branch returned
+       above, and it never touches slot numbers on the shelf you left. */
+    if(!canDragOrder()){
+      renderList();
+      return toast('That is not the shelf order on screen, so dragging would re-file the whole shelf. Sort by "Shelf order — yours" to drag records about.', 4200);
+    }
     renumberFromDom(tiles());
     save();
     renderShelfGrid();
@@ -5084,7 +5120,8 @@ $('#btnHelp').onclick = () => {
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
-    <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They keep the order they were already in, and nothing moves until you tap the destination. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
+    <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They land in the order you can see them in, so working through the crate <i>Title A–Z</i> and re-filing a run puts them away A–Z. Nothing moves until you tap the destination.</p>
+    <p class="hint"><b>It works under any sort or filter.</b> Sort <i>Title A–Z</i>, narrow to a label, search for something — you can still tick a run of sleeves and send them to a crate. The one thing that needs <i>Shelf order — yours</i> is <i>dragging</i> a record into a new position, because that writes what's on screen straight onto the shelf. Try it under another sort and Crate puts the grid back and says so rather than re-filing the whole shelf behind you. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
     <p class="hint"><b>Filing a lot of tracks under one genre.</b> Tap <i>tag genre</i> above the list and a tap ticks instead of opening. In <i>Tracks</i> you tick tracks one by one; in <i>Sleeves</i> a tap ticks every track on that record, and a dashed outline means only some of them are ticked. <i>Select all</i> takes what's on screen, filters and search included — so narrow to a shelf, a label or a search first and one tap has the whole run. <i>Set genre…</i> then offers every genre you already use, or a box to type a new one, and tells you how many tracks across how many records are about to change. If it wasn't what you meant, <i>undo</i> in the same row puts every one of them back exactly as it was. The ticks stay put afterwards, so correcting a spelling is one more tap. This is separate from <i>arrange records</i> — turning either on puts the other away, because a tap can't mean two things at once.</p>
     <p class="hint"><b>The camera closes on a hit.</b> Scan a sleeve and it shuts itself off, so you can put the record down before tapping Scan for the next one. Look-ups queue and resolve one a second in the background, so Discogs never throttles you.</p>
     <p class="hint"><b>You pick the pressing.</b> One barcode often matches a dozen releases — the original, the reissue, the promo, a foreign copy — and they carry different tracklists and different prices. When there's more than one, Crate shows them all and files nothing until you choose. A queued scan waits as <i>pick one</i> until you tap it, so nothing is lost if you're busy.</p>
