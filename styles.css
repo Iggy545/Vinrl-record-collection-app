@@ -365,7 +365,12 @@ input:focus,select:focus,textarea:focus{border-color:var(--sticker);outline:none
 .pickbtn.on{border-color:var(--sticker);color:var(--sticker)}
 .pickbtn.on::after{color:var(--sticker)}
 .filterbar .pickbtn{padding:9px 8px;font-size:13px;min-height:41px}
-.filterbar .lane .pickbtn{flex:1 1 0;width:auto}
+/* min-width:0 for the reason the input/select rule above carries it: a flex
+   item's automatic minimum is its min-content width, so one long crate name
+   would squeeze the control beside it to nothing instead of ellipsising.
+   The Shelf lane is the first to hold a pickbtn AND a select, which is what
+   makes this reachable — the Genre lane has only ever held the one. */
+.filterbar .lane .pickbtn{flex:1 1 0;width:auto;min-width:0}
 /* A .row lane is `flex:1` with min-width:auto, so its automatic minimum
    size is the BUTTON'S min-content width — one long crate or genre name
    and the control beside it is squeezed to nothing instead of the label
@@ -703,4 +708,34 @@ nav button.on{color:var(--sticker)}
 
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
+}
+
+/* ── jump to a letter ──────────────────────────────────────
+   Sticky rather than fixed, unlike #crateLit: that one is fixed and has to
+   be a body child to escape the view's animated transform, but sticky is
+   resolved against the scroll container and doesn't care. top is TOPBAR_H,
+   the same 56 the spotlight scrolls to, so the strip parks just under the
+   bar instead of behind it.
+
+   Hidden while a sheet is up: #crateLit lands at top 62 and would sit on
+   top of it, and you are looking at the rail then anyway, not the grid. */
+.azbar{position:sticky;top:56px;z-index:30;
+  display:flex;gap:2px;justify-content:space-between;
+  margin:10px 0 2px;padding:5px 4px;
+  background:var(--wax);border:1px solid var(--groove);border-radius:var(--r)}
+.azbar button{flex:1 1 0;min-width:0;padding:5px 0;
+  background:none;border:0;border-radius:4px;
+  font-family:var(--mono);font-size:11px;line-height:1;color:var(--dust);
+  cursor:pointer}
+/* Nothing under this letter. Left in place rather than removed so the strip
+   never reflows under your thumb as filters change — the letters stay where
+   your muscle memory left them. */
+.azbar button:disabled{opacity:.25;cursor:default}
+.azbar button:not(:disabled){color:var(--card)}
+.azbar button:not(:disabled):hover{background:var(--groove)}
+.azbar button.on{background:var(--sticker);color:var(--ink);font-weight:700}
+body.locating .azbar{display:none !important}
+@media (max-width:400px){
+  .azbar{gap:1px;padding:5px 2px}
+  .azbar button{font-size:10px}
 }

@@ -6,7 +6,7 @@
 /* Bumped automatically by scripts/sync.ps1 on every release. Shown at the
    bottom of Setup so you can tell at a glance which build a device is
    actually running — a cached page looks identical otherwise. */
-const APP_VERSION = '0.12.51';
+const APP_VERSION = '0.12.52';
 
 const mem = {};
 const store = {
@@ -1034,6 +1034,12 @@ let setGenreSel = [];     /* Sets tab scope */
    shelf-rename handler and pruned by renderSetControls, because a scope
    naming a shelf that has gone builds from everything without saying so. */
 let setShelfSel = [];     /* Sets tab scope */
+/* The crate filter bar's shelf pick, multi from v0.12.52. Iggy asked on
+   2026-08-22, reversing his 2026-08-18 call that this one stay single —
+   re-filing sleeves alphabetically means wanting several crates on screen
+   at once. Exact names, never folded, same rule as setShelfSel: `add shelf`
+   allows Main beside main, and folding them would tick both off one tap. */
+let shelfSel = [];        /* crate filter */
 
 const pickLabel = (list, none) =>
   !list.length ? none : list.length === 1 ? list[0] : list[0] + ' +' + (list.length - 1);
@@ -1647,9 +1653,8 @@ let crateEdit = false;
 const RAIL_MAX = 150;
 
 function crateList(){
-  const shelf = $('#shelfFilter') ? $('#shelfFilter').value : '';
   const all = DB.items
-    .filter(i => !shelf || i.shelf === shelf)
+    .filter(i => !shelfSel.length || shelfSel.includes(i.shelf))
     .sort((a,b) => shelfRank(a.shelf) - shelfRank(b.shelf) || bySlot(a,b)
                    || (a.added||'').localeCompare(b.added||''));
   if(all.length <= RAIL_MAX) return all;
@@ -1669,7 +1674,7 @@ function crateList(){
 }
 
 function updateCrateBar(){
-  const shelf = $('#shelfFilter') ? $('#shelfFilter').value : '';
+  const shelf = pickLabel(shelfSel, '');
   /* Arranging no longer needs a single shelf picked. Reordering happens
      within each shelf's own run of spines, and dropping on a shelf tile
      moves the record — both work fine on the all-shelves view. */
@@ -1739,7 +1744,7 @@ function filters(){
   return {
     set: setFilterSel(),
     q: $('#q').value.trim().toLowerCase(),
-    shelf: $('#shelfFilter').value,
+    shelves: shelfSel.slice(),
     fmt: $('#fmtFilter').value,
     lo: parseFloat($('#bpmMin').value) || null,
     hi: parseFloat($('#bpmMax').value) || null,
@@ -1783,7 +1788,7 @@ const keyOk = (t,f) => !f.keys ? true : f.keys.includes(t.key);
 function relOk(it,f){
   /* Record level, so the sleeve grid filtered to a set IS the pull list. */
   if(f.set && !f.set.recs.has(it.uid)) return false;
-  if(f.shelf && it.shelf !== f.shelf) return false;
+  if(f.shelves.length && !f.shelves.includes(it.shelf)) return false;
   if(f.fmt && !(it.format||'').toLowerCase().includes(f.fmt.toLowerCase())) return false;
   if(!genreOk(it,f)) return false;
   if(f.q && ![it.artist,it.title,it.label,it.catno,it.barcode,(it.genres||[]).join(' '),
@@ -2462,8 +2467,9 @@ function renderGrid(){
 
 /* ── shelves as separate crates ─────────────────────────────
    One tile per shelf, its spines drawn from the records sitting on
-   it. Tapping a tile filters the collection to that shelf; tapping
-   the same one again clears it. "Rearrange" turns on drag-to-reorder,
+   it. Tapping a tile adds that crate to the filter; tapping a lit one
+   takes it out again, so several crates are three taps. "Rearrange"
+   turns on drag-to-reorder,
    and DB.shelves order is what the filter and the sheet's shelf
    picker read, so moving a tile moves it everywhere. */
 let shelfEdit = false;
@@ -2471,7 +2477,7 @@ let shelfEdit = false;
 function renderShelfGrid(){
   const el = $('#shelfGrid');
   if(!el) return;
-  const active = $('#shelfFilter').value;
+  const active = shelfSel;
   el.classList.toggle('editing', shelfEdit);
 
   if(!DB.shelves.length){
@@ -2485,7 +2491,7 @@ function renderShelfGrid(){
       const h = hue(it.artist + it.label);
       return `<i style="background:linear-gradient(180deg,hsl(${h} 36% 32%),hsl(${h} 30% 16%))"></i>`;
     }).join('');
-    return `<div class="shelfTile${items.length ? '' : ' empty'}${s === active ? ' on' : ''}"
+    return `<div class="shelfTile${items.length ? '' : ' empty'}${active.includes(s) ? ' on' : ''}"
         data-i="${i}" data-shelf-name="${esc(s)}">
       <div class="art">
         <div class="spines">${bars}</div>
@@ -2498,9 +2504,12 @@ function renderShelfGrid(){
 }
 
 function renderFilters(){
-  const sh = $('#shelfFilter'), keepS = sh.value;
-  sh.innerHTML = '<option value="">All shelves</option>' + DB.shelves.map(s=>`<option>${esc(s)}</option>`).join('');
-  sh.value = keepS;
+  /* Pruned to the live shelves on every render, exactly as the genre pick
+     below is: the list is derived from DB.shelves, so a crate being removed
+     would otherwise leave the collection filtered to a name nothing has —
+     an empty grid with no visible cause. Exact match, no folding. */
+  shelfSel = shelfSel.filter(s => DB.shelves.includes(s));
+  setPickLabel('#shelfFilter', pickLabel(shelfSel, 'All shelves'), shelfSel.length);
   const fmts = [...new Set(DB.items.map(i => (i.format||'').split(',')[0].trim().split(' ')[0]).filter(Boolean))].sort();
   const ff = $('#fmtFilter'), keepF = ff.value;
   ff.innerHTML = '<option value="">All formats</option>' + fmts.map(f=>`<option>${esc(f)}</option>`).join('');
@@ -2582,7 +2591,7 @@ function updateArrangeBar(){
   if(!bar) return;
   const usable = MODE === 'sleeves';
   bar.style.display = usable ? '' : 'none';
-  const shelf = $('#shelfFilter').value;
+  const shelf = pickLabel(shelfSel, '');
   /* The track list has no sleeves to tick, so it still drops you out.
      Selecting goes with it, unless the rail is still arranging and can
      carry the set. */
@@ -2859,6 +2868,82 @@ function renderSetFilterBar(){
   $('#setFilterOff').onclick = () => { setFilter = null; renderList(); };
 }
 
+
+/* ── jump to a letter ───────────────────────────────────────
+   A strip of A–Z under the top bar while an alphabetical sort is on, so
+   re-filing a crate is tap-a-letter rather than a long thumb drag.
+
+   AZ_KEY must hand back EXACTLY what the matching comparator in visible()
+   sorts on, or the jump lands somewhere the letter does not explain. That
+   rules out the obvious refinement of stripping a leading "The": the
+   comparators do not, so "The Orb" files under T on screen and the strip
+   has to agree with the screen, not with a record shop. */
+const AZ_KEY = {
+  track:  it => it.title,
+  artist: it => it.artist,
+  label:  it => it.label,
+  genre:  it => relGenre(it)
+};
+const AZ_LETTERS = ['#'].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+
+/* Accents are folded because localeCompare sorts É in with the E's — left
+   alone it would file under # and tapping # would jump to the middle of the
+   grid. Anything else non-alphabetic (digits, a bracket) buckets as #, and
+   digits sort before letters in collation, which is why # leads the strip.
+   A blank gets no letter at all: the comparators push blanks to the end,
+   and they stay reachable by scrolling rather than earning a bucket. */
+function azLetter(v){
+  const c = String(v == null ? '' : v).trim()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .charAt(0).toUpperCase();
+  if(!c) return '';
+  return c >= 'A' && c <= 'Z' ? c : '#';
+}
+
+let azOn = '';                       /* the letter last jumped to, for the pill */
+
+/* Built from visible() rather than DB.items so the strip only ever offers
+   letters the grid can actually show — and so a reversed sort needs no
+   special case: "the first one in visible order" is the first you meet
+   scrolling down, whichever way the list runs. */
+function renderAZBar(){
+  const bar = $('#azBar');
+  if(!bar) return;
+  const key = AZ_KEY[$('#sort').value];
+  if(MODE !== 'sleeves' || !key){ bar.style.display = 'none'; azOn = ''; return; }
+
+  const first = new Map();           /* letter -> uid of the first one along */
+  visible().forEach(it => {
+    const L = azLetter(key(it));
+    if(L && !first.has(L)) first.set(L, it.uid);
+  });
+  if(azOn && !first.has(azOn)) azOn = '';
+
+  bar.style.display = first.size ? 'flex' : 'none';
+  bar.innerHTML = AZ_LETTERS.map(L =>
+    `<button type="button" data-az="${L}"${first.has(L) ? '' : ' disabled'}` +
+    `${L === azOn ? ' class="on"' : ''}>${L}</button>`).join('');
+  bar.dataset.first = JSON.stringify([...first]);
+}
+
+/* Scrolled by hand rather than with scrollIntoView: the sleeve has to clear
+   BOTH sticky things above it — the top bar and the strip itself — and
+   scrollIntoView has no way to say by how much. block:'start' would tuck the
+   record under the strip you just tapped. */
+function jumpToLetter(L){
+  const bar = $('#azBar');
+  const first = new Map(JSON.parse(bar.dataset.first || '[]'));
+  const uid = first.get(L);
+  if(!uid) return;
+  const el = document.querySelector(`#grid .rec[data-uid="${uid}"]`);
+  if(!el) return;
+  azOn = L;
+  bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.az === L));
+  const clear = TOPBAR_H + bar.getBoundingClientRect().height + 8;
+  window.scrollTo({top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - clear),
+                   behavior: 'smooth'});
+}
+
 function renderList(){
   $('#grid').style.display  = MODE==='sleeves' ? '' : 'none';
   $('#tlist').style.display = MODE==='tracks'  ? '' : 'none';
@@ -2866,6 +2951,7 @@ function renderList(){
   renderCrate();
   updateArrangeBar();
   if(MODE==='sleeves') renderGrid(); else renderTracks();
+  renderAZBar();                       /* after renderGrid: it reads the same visible() */
   paintPicked();
   paintSel();
   /* Same reason as paintSel: both surfaces are rebuilt from scratch here,
@@ -4412,10 +4498,10 @@ $('#btnBlank').onclick = () => {
   save(); renderAll(); toast('Added to ' + it.shelf + ', position ' + it.slot);
 };
 
-/* #genreFilter is deliberately not in this list any more — it is a button
-   now, and a button fires neither input nor change. It redraws from its
-   own handler below. */
-['#q','#sort','#shelfFilter','#fmtFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic']
+/* #genreFilter and #shelfFilter are deliberately not in this list — they
+   are buttons now, and a button fires neither input nor change. They redraw
+   from their own handlers below. */
+['#q','#sort','#fmtFilter','#bpmMin','#bpmMax','#keyFilter','#harmonic']
   .forEach(s => {
     $(s).addEventListener('input', renderList);
     $(s).addEventListener('change', renderList);
@@ -4424,6 +4510,18 @@ $('#btnBlank').onclick = () => {
 $('#genreFilter').onclick = () => openGenrePick(genreSel,
   {title: 'Filter by genre', none: 'All genres'},
   picked => { genreSel = picked; renderFilters(); renderList(); });
+
+/* renderShelfGrid as well as renderList, unlike the genre one: the tiles
+   carry the lit state now, so they have to be redrawn with the label. */
+/* Delegated, because renderAZBar rebuilds the buttons on every render. */
+$('#azBar').onclick = e => {
+  const b = e.target.closest('button[data-az]');
+  if(b && !b.disabled) jumpToLetter(b.dataset.az);
+};
+
+$('#shelfFilter').onclick = () => openShelfPick(shelfSel,
+  {title: 'Filter by crate', none: 'All shelves'},
+  picked => { shelfSel = picked; renderFilters(); renderList(); renderShelfGrid(); });
 
 /* The arrow points the way the list runs, and the title says what a tap
    will do — an unlabelled arrow on its own is a coin toss. */
@@ -4444,8 +4542,8 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
 
 $('#clearF').onclick = () => {
   ['#q','#bpmMin','#bpmMax'].forEach(s => $(s).value = '');
-  ['#shelfFilter','#fmtFilter','#keyFilter'].forEach(s => $(s).value = '');
-  genreSel = [];                          /* a button, so it has no .value to clear */
+  ['#fmtFilter','#keyFilter'].forEach(s => $(s).value = '');
+  genreSel = []; shelfSel = [];           /* buttons, so they have no .value to clear */
   $('#harmonic').checked = false;
   /* The set filter is a filter, so "clear filters" clears it too — leaving
      it on while everything else reset is the same class of surprise as
@@ -4457,8 +4555,11 @@ $('#clearF').onclick = () => {
   d.setAttribute('aria-pressed','false'); d.textContent = '↓'; d.title = 'Reverse the order';
   /* renderFilters, not just renderList: the genre button's label is written
      there, so clearing without it leaves the bar still reading "Trance +1"
-     over an unfiltered crate. */
-  renderFilters(); renderList();
+     over an unfiltered crate. And renderShelfGrid on top of both, because
+     the crate tiles carry the lit state now — without it "clear filters"
+     emptied the selection while leaving three tiles looking chosen, which
+     is a straight lie about what the grid below is showing. */
+  renderFilters(); renderList(); renderShelfGrid();
 };
 
 document.addEventListener('click', e => {
@@ -4523,7 +4624,7 @@ document.addEventListener('click', e => {
     if(!to || to === from) return;
     if(DB.shelves.some((s, j) => j !== i && s.toLowerCase() === to.toLowerCase()))
       return toast('You already have a shelf called that');
-    const wasFiltered = $('#shelfFilter').value === from;
+    const wasFiltered = shelfSel.includes(from);
     DB.shelves[i] = to;
     let n = 0;
     DB.items.forEach(x => { if(x.shelf === from){ x.shelf = to; n++; } });
@@ -4534,10 +4635,14 @@ document.addEventListener('click', e => {
        it cannot find — without this a rename would silently widen the
        pool from one crate to the whole collection */
     setShelfSel = setShelfSel.map(s => s === from ? to : s);
+    /* and the crate filter, for the same reason — renderFilters prunes what
+       it cannot find, so without this a rename would silently widen the
+       crate view from one shelf to the whole collection */
+    shelfSel = shelfSel.map(s => s === from ? to : s);
     save(); renderAll();
-    /* the filter dropdown was rebuilt around the new name, so a filter
-       pointing at the old one would silently fall back to All shelves */
-    if(wasFiltered){ $('#shelfFilter').value = to; renderShelfGrid(); renderList(); }
+    /* renderAll has already redrawn from the carried-over name; this is
+       just the belt-and-braces repaint of the two surfaces that show it */
+    if(wasFiltered){ renderShelfGrid(); renderList(); }
     toast('Renamed to “' + to + '”' + (n ? ' · ' + n + ' record' + (n === 1 ? '' : 's') + ' updated' : ''), 3200);
   }
 });
@@ -4764,9 +4869,15 @@ $('#btnShelfEdit').onclick = () => {
     }
 
     if(shelfEdit) return;                       /* rearranging, not browsing */
-    const sel = $('#shelfFilter');
-    sel.value = sel.value === tile.dataset.shelfName ? '' : tile.dataset.shelfName;
-    renderList(); renderShelfGrid();
+    /* Toggle, not replace (Iggy's call, 2026-08-22): tapping three tiles
+       builds the selection up, and tapping a lit one drops it back out.
+       renderFilters as well, because the Shelf button's label is written
+       there and it is the only thing that says so when the tiles have
+       scrolled off. */
+    const name = tile.dataset.shelfName;
+    shelfSel = shelfSel.includes(name) ? shelfSel.filter(x => x !== name)
+                                       : shelfSel.concat([name]);
+    renderFilters(); renderList(); renderShelfGrid();
     $('#grid').scrollIntoView({behavior:'smooth', block:'start'});
   });
 })();
@@ -5120,6 +5231,7 @@ $('#btnHelp').onclick = () => {
     <p class="hint">Scan the barcode on a sleeve and Crate looks it up on Discogs, pulls the artwork, tracklist and lowest current asking price, and files it away. No barcode? Type the catalogue number instead — it works on white labels and 90s 12"s that never had one.</p>
     <p class="hint"><b>No barcode, nothing to type?</b> <i>Read cat. no.</i> points the camera at the code on the spine or centre label; <i>Read cover</i> reads the artist and title off the front. Line it up, tap Read it, check what came back — small stylised print is the hardest thing to read, so it always asks before searching. The reader downloads itself the first time you use it and works offline after that.</p>
     <p class="hint"><b>New records go where you say.</b> <i>File anything new into</i> on the Scan screen picks the crate and whether a record lands at the front or the back of it — set once, and every way of adding follows it: camera, Find, reading a sleeve, or by hand. Filing at the front shifts everything already on that shelf down one. A CSV import ignores it and uses its own Shelf column.</p>
+    <p class="hint"><b>Finding your way round a big crate.</b> Tap a crate tile to narrow to it, then tap a second and a third to add them — tapping a lit one takes it back out, and the <i>Shelf</i> button above the grid says which you have on. Sort by <i>Title A–Z</i>, <i>Artist A–Z</i>, <i>Label</i> or <i>Genre A–Z</i> and a strip of letters pins itself under the top bar: tap one to jump straight to it, and it stays put so the next jump is one tap too. Letters nothing is filed under are greyed out, and <i>#</i> covers anything starting with a number.</p>
     <p class="hint"><b>Moving a lot at once.</b> Tap <i>arrange records</i>, then <i>select several</i>, and a tap ticks a record instead of lifting it. <i>Select all</i> takes everything on screen — so search, or pick a shelf, and one tap has exactly the run you want. Then tap a shelf to send the lot there, or <i>place them</i> and tap a record to slot them all in just in front of it. They land in the order you can see them in, so working through the crate <i>Title A–Z</i> and re-filing a run puts them away A–Z. Nothing moves until you tap the destination.</p>
     <p class="hint"><b>It works under any sort or filter.</b> Sort <i>Title A–Z</i>, narrow to a label, search for something — you can still tick a run of sleeves and send them to a crate. The one thing that needs <i>Shelf order — yours</i> is <i>dragging</i> a record into a new position, because that writes what's on screen straight onto the shelf. Try it under another sort and Crate puts the grid back and says so rather than re-filing the whole shelf behind you. <i>Undo</i> in the same row puts the last move back — every move, one at a time or forty at once, drag or tap — and it steps back through the last twenty. It lasts as long as the app is open, so undo a wrong move before you close it.</p>
     <p class="hint"><b>Filing a lot of tracks under one genre.</b> Tap <i>tag genre</i> above the list and a tap ticks instead of opening. In <i>Tracks</i> you tick tracks one by one; in <i>Sleeves</i> a tap ticks every track on that record, and a dashed outline means only some of them are ticked. <i>Select all</i> takes what's on screen, filters and search included — so narrow to a shelf, a label or a search first and one tap has the whole run. <i>Set genre…</i> then offers every genre you already use, or a box to type a new one, and tells you how many tracks across how many records are about to change. If it wasn't what you meant, <i>undo</i> in the same row puts every one of them back exactly as it was. The ticks stay put afterwards, so correcting a spelling is one more tap. This is separate from <i>arrange records</i> — turning either on puts the other away, because a tap can't mean two things at once.</p>
